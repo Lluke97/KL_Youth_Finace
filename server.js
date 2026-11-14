@@ -279,7 +279,7 @@ app.get('/api/receive-channels', (req, res) => {
 // cafe-pos doesn't record a payment method for those) can't be placed in
 // any bucket and are called out separately so the gap is visible instead
 // of silently wrong.
-app.get('/api/balance-breakdown', (req, res) => {
+function computeBalanceBreakdown() {
   const settlements = db.getSettlements().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const baseline = settlements[0] || null;
   const baselineCreatedAt = baseline ? baseline.createdAt : null;
@@ -299,7 +299,7 @@ app.get('/api/balance-breakdown', (req, res) => {
   const baseTng = baseline ? baseline.tng : 0;
   const baseBank = baseline ? (baseline.bank || 0) : 0;
 
-  res.json({
+  return {
     baseline: baseline ? { date: baseline.date, cash: baseCash, tng: baseTng, bank: baseBank } : null,
     deltas: { cash, tng, bank },
     current: {
@@ -310,7 +310,35 @@ app.get('/api/balance-breakdown', (req, res) => {
     },
     unattributedCount,
     unattributedAmount
-  });
+  };
+}
+
+// Called right after a channel-tagged income/expense is saved, so the 정산
+// (settlement) history gets a new row reflecting the up-to-date cash/TnG/
+// bank split automatically — instead of requiring a fresh manual count each
+// time. A transaction with no channel can't be placed in a bucket, so it's
+// left out (same as in computeBalanceBreakdown) and no row is added for it.
+function recordAutoSettlement(txn) {
+  if (!txn || !txn.channel) return;
+  const b = computeBalanceBreakdown();
+  const entry = {
+    id: 'settle_' + uid(),
+    date: txn.date,
+    cash: b.current.cash,
+    tng: b.current.tng,
+    bank: b.current.bank,
+    total: b.current.total,
+    source: 'auto',
+    memo: `자동 반영: ${txn.item || txn.category || ''} (${txn.type === 'income' ? '+' : '-'}${txn.amount})`,
+    createdAt: new Date().toISOString()
+  };
+  const list = db.getSettlements();
+  list.push(entry);
+  db.saveSettlements(list);
+}
+
+app.get('/api/balance-breakdown', (req, res) => {
+  res.json(computeBalanceBreakdown());
 });
 
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
@@ -437,6 +465,7 @@ app.post('/api/admin/transactions', (req, res) => {
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
+  recordAutoSettlement(entry);
   res.status(201).json(entry);
 });
 
@@ -469,6 +498,7 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
+  recordAutoSettlement(entry);
   res.status(201).json(entry);
 });
 
@@ -502,6 +532,7 @@ app.post('/api/admin/income', (req, res) => {
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
+  recordAutoSettlement(entry);
   res.status(201).json(entry);
 });
 
@@ -655,6 +686,25 @@ app.post('/api/admin/sync-cafe', async (req, res) => {
 
     settings.cafeSync = { lastOrderAt, lastExpenseCreatedAt };
     db.saveSettings(settings);
+
+    // One settlement row for the whole sync, not one per order, so the
+    // 정산 history doesn't get flooded by a busy day at the cafe.
+    if (toAdd.some((t) => t.channel)) {
+      const b = computeBalanceBreakdown();
+      const list = db.getSettlements();
+      list.push({
+        id: 'settle_' + uid(),
+        date: todayStr(),
+        cash: b.current.cash,
+        tng: b.current.tng,
+        bank: b.current.bank,
+        total: b.current.total,
+        source: 'auto',
+        memo: `자동 반영: 카페 동기화 (${toAdd.length}건)`,
+        createdAt: new Date().toISOString()
+      });
+      db.saveSettlements(list);
+    }
 
     res.json({ added: toAdd.length, needsReview: toAdd.filter((t) => t.tag === 'needs-review').length });
   } catch (e) {
