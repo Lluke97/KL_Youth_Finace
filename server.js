@@ -523,7 +523,10 @@ app.post('/api/admin/transactions', (req, res) => {
 
 // Dedicated purchase/expense entry: preset categories + optional receipt
 // photo, instead of the free-text category in the generic form above.
-app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
+// Shared by the admin purchase form and the public quick-entry page below -
+// anyone can add a new expense (like cafe-pos's entry screen), but editing
+// or deleting one is admin-only (see PUT/DELETE /api/admin/transactions/:id).
+function createPurchaseEntry(req, res) {
   const { date, category, vendor, item, amount, memo, author, payment } = req.body || {};
   const amountNum = parseFloat(amount);
   if (!date || !PURCHASE_CATEGORIES.includes(category) || !item || Number.isNaN(amountNum) || amountNum <= 0 || !PAYMENT_METHODS.includes(payment)) {
@@ -552,7 +555,14 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
   db.saveTransactions(txns);
   recordAutoSettlement(entry);
   res.status(201).json(entry);
-});
+}
+
+app.post('/api/admin/purchases', upload.single('receipt'), createPurchaseEntry);
+
+// Public quick-entry — no admin login needed to add an expense, same as
+// cafe-pos's entry screen. Only adding is open; editing/deleting stays
+// behind /admin.
+app.post('/api/entries/purchase', upload.single('receipt'), createPurchaseEntry);
 
 // Dedicated income entry: preset categories (회비/후원금/헌금/기타수입)
 // instead of the free-text category in the generic form above. 회비 is
