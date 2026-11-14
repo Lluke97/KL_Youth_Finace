@@ -147,6 +147,10 @@
         <input type="number" name="amount" step="0.01" min="0.01" required>
       </div>
       <div>
+        <label>결제수단</label>
+        <select name="payment" id="purchasePayment" required></select>
+      </div>
+      <div>
         <label>입력자</label>
         <input type="text" name="author" placeholder="이름">
       </div>
@@ -166,7 +170,7 @@
       <h3>최근 구매 지출 (최근 10건 · 바로 수정/삭제 가능)</h3>
       <div class="mini-table-wrap">
         <table id="purchaseRecentTable">
-          <thead><tr><th>날짜</th><th>카테고리</th><th>품목</th><th class="amount">금액</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>카테고리</th><th>품목</th><th>결제</th><th class="amount">금액</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -370,12 +374,20 @@ async function exportSheet() {
 
 let purchaseCategoriesList = [];
 let incomeCategoriesList = [];
+let paymentMethodsList = [];
 
 async function loadPurchaseCategories() {
   const res = await fetch('/api/purchase-categories');
   purchaseCategoriesList = await res.json();
   const select = document.getElementById('purchaseCategory');
   select.innerHTML = purchaseCategoriesList.map((c) => `<option value="${c}">${c}</option>`).join('');
+}
+
+async function loadPaymentMethods() {
+  const res = await fetch('/api/payment-methods');
+  paymentMethodsList = await res.json();
+  const select = document.getElementById('purchasePayment');
+  select.innerHTML = paymentMethodsList.map((c) => `<option value="${c}">${c}</option>`).join('');
 }
 
 document.getElementById('purchaseForm').addEventListener('submit', async (e) => {
@@ -556,7 +568,7 @@ function txRowHtml(t) {
       <td>${t.date}</td>
       <td>${t.source}</td>
       <td>${t.category}</td>
-      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
+      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.payment ? ' · ' + t.payment : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
       <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
       <td class="tag-cell"></td>
       <td class="row-actions">
@@ -657,15 +669,18 @@ function purchaseRowHtml(t) {
       <td>${t.date}</td>
       <td>${t.category}</td>
       <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}</td>
+      <td>${t.payment || ''}</td>
       <td class="amount expense">-${fmt(t.amount)}</td>
       <td class="row-actions">${miniActionsHtml(t.id)}</td></tr>`;
 }
 function purchaseEditRowHtml(t) {
   const opts = purchaseCategoriesList.map((c) => `<option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('');
+  const payOpts = paymentMethodsList.map((c) => `<option value="${c}" ${c === t.payment ? 'selected' : ''}>${c}</option>`).join('');
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
       <td><select class="edit-input" data-f="category">${opts}</select></td>
       <td><input type="text" class="edit-input" data-f="item" value="${esc(t.item)}"></td>
+      <td><select class="edit-input" data-f="payment">${payOpts}</select></td>
       <td><input type="number" step="0.01" class="edit-input amount-input" data-f="amount" value="${t.amount}"></td>
       <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
 }
@@ -713,7 +728,7 @@ function manualEditRowHtml(t) {
 }
 
 const MINI_TABLES = {
-  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 5 },
+  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 6 },
   incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 5 },
   manualRecentTable: { row: manualRowHtml, edit: manualEditRowHtml, cols: 6 }
 };
@@ -790,7 +805,7 @@ async function loadAll() {
 }
 
 document.getElementById('fTag').addEventListener('change', renderTxTable);
-Promise.all([loadPurchaseCategories(), loadIncomeCategories()]).then(loadAll);
+Promise.all([loadPurchaseCategories(), loadIncomeCategories(), loadPaymentMethods()]).then(loadAll);
 loadSettlements();
 </script>
 </body>

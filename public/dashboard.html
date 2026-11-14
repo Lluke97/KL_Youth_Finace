@@ -28,13 +28,6 @@
       <div class="nav-menu" id="navMenu" hidden>
         <a href="/">🏠 홈</a>
         <a href="/dashboard.html" class="current">📊 대시보드</a>
-        <a href="/admin#sync">🔄 카페 동기화</a>
-        <a href="/admin#purchase">🧾 구매 지출 입력</a>
-        <a href="/admin#income">💸 수입 입력</a>
-        <a href="/admin#settlement">💰 정산 입력</a>
-        <a href="/admin#manual">✏️ 직접 입력</a>
-        <a href="/admin#bulk">📥 일괄 업로드</a>
-        <a href="/admin#all">📋 전체 내역</a>
         <a href="/admin">🛠️ 관리자</a>
       </div>
     </div>
@@ -296,8 +289,17 @@ document.getElementById('fSource').addEventListener('change', loadTransactions);
 document.getElementById('fType').addEventListener('change', loadTransactions);
 document.getElementById('fCategory').addEventListener('change', loadTransactions);
 
-loadSummary().then(loadSettlement);
-loadTransactions();
+function refreshAll() {
+  loadSummary().then(loadSettlement);
+  loadTransactions();
+}
+refreshAll();
+
+// Admin entries are made on a different page (often a different tab/device),
+// so re-pull the numbers whenever this tab becomes active again instead of
+// showing whatever was on screen when it was last loaded.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+window.addEventListener('focus', refreshAll);
 </script>
 </body>
 </html>

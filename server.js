@@ -17,6 +17,9 @@ const PURCHASE_CATEGORIES = ['식비·다과', '교통비', '행사비', '비품
 // cafe, so they get their own preset dropdown instead of free-text.
 const INCOME_CATEGORIES = ['회비', '후원금', '헌금', '기타수입'];
 
+// How a purchase/expense was actually paid for.
+const PAYMENT_METHODS = ['현금', '카드', '터치앤고'];
+
 // Receipt photos live on the same Railway volume as the JSON data, so they
 // survive redeploys. Optional — a purchase can be logged with no photo.
 const RECEIPTS_DIR = path.join(__dirname, 'data', 'receipts');
@@ -212,6 +215,10 @@ app.get('/api/income-categories', (req, res) => {
   res.json(INCOME_CATEGORIES);
 });
 
+app.get('/api/payment-methods', (req, res) => {
+  res.json(PAYMENT_METHODS);
+});
+
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
 // names/order. Opens straight into Excel/Numbers/Google Sheets.
 app.get('/api/admin/bulk-template.csv', maybeRequireAdmin, (req, res) => {
@@ -341,10 +348,10 @@ app.post('/api/admin/transactions', (req, res) => {
 // Dedicated purchase/expense entry: preset categories + optional receipt
 // photo, instead of the free-text category in the generic form above.
 app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
-  const { date, category, vendor, item, amount, memo, author } = req.body || {};
+  const { date, category, vendor, item, amount, memo, author, payment } = req.body || {};
   const amountNum = parseFloat(amount);
-  if (!date || !PURCHASE_CATEGORIES.includes(category) || !item || Number.isNaN(amountNum) || amountNum <= 0) {
-    return res.status(400).json({ error: `date, category (${PURCHASE_CATEGORIES.join('|')}), item and a positive amount are required` });
+  if (!date || !PURCHASE_CATEGORIES.includes(category) || !item || Number.isNaN(amountNum) || amountNum <= 0 || !PAYMENT_METHODS.includes(payment)) {
+    return res.status(400).json({ error: `date, category (${PURCHASE_CATEGORIES.join('|')}), item, a positive amount, and payment (${PAYMENT_METHODS.join('|')}) are required` });
   }
   const entry = {
     id: 'tx_' + uid(),
@@ -355,6 +362,7 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
     category,
     item,
     vendor: vendor || '',
+    payment,
     amount: amountNum,
     memo: memo || '',
     author: author || '',
@@ -473,7 +481,7 @@ app.put('/api/admin/transactions/:id', (req, res) => {
   const txns = db.getTransactions();
   const idx = txns.findIndex((t) => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'amount', 'memo', 'author'];
+  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'amount', 'memo', 'author'];
   fields.forEach((f) => { if (req.body && req.body[f] !== undefined) txns[idx][f] = req.body[f]; });
   db.saveTransactions(txns);
   res.json(txns[idx]);
