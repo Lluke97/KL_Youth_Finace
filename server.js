@@ -203,6 +203,32 @@ if (process.env.FIX_SETTLEMENT_20261114 === '1') {
   }
 }
 
+// One-time fix: the 2026-11-14 settlement above was taken before the
+// RM348 "토요모임 저녁 · 돈까스랩" purchase was paid for by card, so it no
+// longer matches the ledger (which already counts that expense). Adds a
+// follow-up settlement with the card payment subtracted from the bank
+// figure. Guarded by an env var + fixed id, same pattern as the fix above.
+if (process.env.SETTLE_CARDFIX_20261114 === '1') {
+  const __settlements2 = db.getSettlements();
+  const __marker2 = 'settle_cardfix20261114';
+  if (!__settlements2.some((s) => s.id === __marker2)) {
+    const cash = 1003.7, tng = 1000, bank = 15438.6 - 348;
+    __settlements2.push({
+      id: __marker2,
+      date: '2026-11-14',
+      cash,
+      tng,
+      bank,
+      total: cash + tng + bank,
+      source: 'manual',
+      memo: '토요모임 저녁(돈까스랩) RM348 카드 결제 반영 (은행 15,438.60 → 15,090.60)',
+      createdAt: new Date().toISOString()
+    });
+    db.saveSettlements(__settlements2);
+    console.log('[youth-budget] applied SETTLE_CARDFIX_20261114 migration');
+  }
+}
+
 // ---------------- Public pages + read-only API (dashboard is open to all) ----------------
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/receipts', express.static(RECEIPTS_DIR));
