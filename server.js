@@ -138,55 +138,94 @@ if (process.env.ADMIN_USER2 && process.env.ADMIN_PASS2) {
 // remove it) to require the admin login again; no code change needed.
 const REQUIRE_ADMIN_AUTH = process.env.REQUIRE_ADMIN_AUTH !== 'false';
 
+// Same toggle idea, for the simple shared passcode that now gates the whole
+// site (not just /admin) — this is sensitive financial data.
+const REQUIRE_SITE_AUTH = process.env.REQUIRE_SITE_AUTH !== 'false';
+const SITE_PASS = process.env.SITE_PASS || 'changeme';
+if (SITE_PASS === 'changeme') {
+  console.warn('[youth-budget] WARNING: using the default site password. Set SITE_PASS env var before going live.');
+}
+
 function safeEqual(a, b) {
   return crypto.timingSafeEqual(Buffer.from(String(a).padEnd(128)), Buffer.from(String(b).padEnd(128)));
 }
 
-// ---- same small HTTP Basic Auth + brute-force lockout as cafe-pos ----
+function isAdminAccount(user, pass) {
+  return ADMIN_ACCOUNTS.some((acc) => safeEqual(user, acc.user) && safeEqual(pass, acc.pass));
+}
+
+// ---- same small HTTP Basic Auth + brute-force lockout as cafe-pos, used
+// for both the site-wide passcode and the admin login (each gets its own
+// lockout bookkeeping so a failed attempt on one doesn't lock out the other) ----
 const FAILED_ATTEMPT_LIMIT = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
-const failedAttempts = new Map();
 
 function clientIp(req) {
   return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
 }
 
-function requireAdmin(req, res, next) {
-  const ip = clientIp(req);
-  const record = failedAttempts.get(ip);
-  if (record && record.lockedUntil && record.lockedUntil > Date.now()) {
-    const waitMin = Math.ceil((record.lockedUntil - Date.now()) / 60000);
-    return res.status(429).send(`Too many failed attempts. Try again in about ${waitMin} minute(s).`);
-  }
-
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const sep = decoded.indexOf(':');
-    const user = decoded.slice(0, sep);
-    const pass = decoded.slice(sep + 1);
-    const matched = ADMIN_ACCOUNTS.some((acc) => safeEqual(user, acc.user) && safeEqual(pass, acc.pass));
-    if (matched) {
-      failedAttempts.delete(ip);
-      return next();
+function makeAuthGate({ realm, failMessage, matchFn }) {
+  const failedAttempts = new Map();
+  return function gate(req, res, next) {
+    const ip = clientIp(req);
+    const record = failedAttempts.get(ip);
+    if (record && record.lockedUntil && record.lockedUntil > Date.now()) {
+      const waitMin = Math.ceil((record.lockedUntil - Date.now()) / 60000);
+      return res.status(429).send(`Too many failed attempts. Try again in about ${waitMin} minute(s).`);
     }
-  }
 
-  const next_count = (record && record.count ? record.count : 0) + 1;
-  if (next_count >= FAILED_ATTEMPT_LIMIT) {
-    failedAttempts.set(ip, { count: next_count, lockedUntil: Date.now() + LOCKOUT_MS });
-  } else {
-    failedAttempts.set(ip, { count: next_count, lockedUntil: 0 });
-  }
+    const header = req.headers.authorization || '';
+    const [scheme, encoded] = header.split(' ');
+    if (scheme === 'Basic' && encoded) {
+      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+      const sep = decoded.indexOf(':');
+      const user = decoded.slice(0, sep);
+      const pass = decoded.slice(sep + 1);
+      if (matchFn(user, pass)) {
+        failedAttempts.delete(ip);
+        return next();
+      }
+    }
 
-  res.set('WWW-Authenticate', 'Basic realm="Youth Budget Admin"');
-  return res.status(401).send('Authentication required.');
+    const next_count = (record && record.count ? record.count : 0) + 1;
+    if (next_count >= FAILED_ATTEMPT_LIMIT) {
+      failedAttempts.set(ip, { count: next_count, lockedUntil: Date.now() + LOCKOUT_MS });
+    } else {
+      failedAttempts.set(ip, { count: next_count, lockedUntil: 0 });
+    }
+
+    res.set('WWW-Authenticate', `Basic realm="${realm}"`);
+    return res.status(401).send(failMessage);
+  };
 }
+
+const requireAdmin = makeAuthGate({
+  realm: 'Jusumjusum Finance Admin',
+  failMessage: 'Authentication required.',
+  matchFn: (user, pass) => isAdminAccount(user, pass)
+});
+
+// Any username works — only the shared passcode (or a full admin login)
+// matters. ADMIN_ACCOUNTS also pass here so an admin who doesn't know the
+// shared passcode can still get in with their own login.
+const requireSiteAccess = makeAuthGate({
+  realm: 'Jusumjusum Finance',
+  failMessage: '비밀번호가 필요합니다. 문의: 회장',
+  matchFn: (user, pass) => safeEqual(pass, SITE_PASS) || isAdminAccount(user, pass)
+});
 
 function maybeRequireAdmin(req, res, next) {
   if (!REQUIRE_ADMIN_AUTH) return next();
   return requireAdmin(req, res, next);
+}
+
+function maybeRequireSiteAccess(req, res, next) {
+  // cafe-pos calls this server-to-server with its own shared-secret header
+  // (see the route below) — it can't answer a browser login prompt, so it's
+  // excluded from the site passcode gate.
+  if (req.path === '/api/webhook/cafe-settlement') return next();
+  if (!REQUIRE_SITE_AUTH) return next();
+  return requireSiteAccess(req, res, next);
 }
 
 // Asia/Kuala_Lumpur "today", same convention as cafe-pos.
@@ -251,7 +290,10 @@ if (process.env.SETTLE_CARDFIX_20261114 === '1') {
   }
 }
 
-// ---------------- Public pages + read-only API (dashboard is open to all) ----------------
+// ---------------- Site-wide passcode gate (sensitive financial data) ----------------
+app.use(maybeRequireSiteAccess);
+
+// ---------------- Public pages + read-only API (dashboard is open to anyone past the gate above) ----------------
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/receipts', express.static(RECEIPTS_DIR));
 
