@@ -42,7 +42,7 @@
   </div>
 
   <section class="block" id="settlementBlock" style="display:none;">
-    <h2>실제 잔액 구성 (최근 정산)</h2>
+    <h2>실제 잔액 구성 (자동 계산)</h2>
     <div id="settlementNote" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></div>
     <div class="cards" id="settlementCards"></div>
     <div id="settlementDiffNote" style="font-size:12px;margin-top:10px;"></div>
@@ -234,30 +234,29 @@ let lastMonthly = null;
 let lastBalance = 0;
 
 async function loadSettlement() {
-  const res = await fetch('/api/settlements');
-  const list = await res.json();
+  const res = await fetch('/api/balance-breakdown');
+  const b = await res.json();
   const block = document.getElementById('settlementBlock');
-  if (!list.length) { block.style.display = 'none'; return; }
+  if (!b.baseline) { block.style.display = 'none'; return; }
   block.style.display = 'block';
-  const s = list[0];
-  const SOURCE_NOTE = { 'cafe-pos': '카페 정산에서 자동 반영', manual: '직접 입력' };
-  document.getElementById('settlementNote').textContent = `${s.date} 기준 (${SOURCE_NOTE[s.source] || s.source})`;
+  document.getElementById('settlementNote').textContent =
+    `${b.baseline.date} 실제 확인 기준으로 그 뒤 입력된 수입/지출을 현금·터치앤고·계좌별로 자동 반영한 값입니다.`;
 
+  const c = b.current;
   const cardsEl = document.getElementById('settlementCards');
   cardsEl.innerHTML = `
-    <div class="card"><div class="label">💵 현금</div><div class="value">${fmt(s.cash)}</div></div>
-    <div class="card"><div class="label">📱 터치앤고</div><div class="value">${fmt(s.tng)}</div></div>
-    <div class="card"><div class="label">🏦 은행</div><div class="value">${s.bank == null ? '—' : fmt(s.bank)}</div></div>
-    <div class="card"><div class="label">합계</div><div class="value">${fmt(s.total)}</div></div>`;
+    <div class="card"><div class="label">💵 현금</div><div class="value">${fmt(c.cash)}</div></div>
+    <div class="card"><div class="label">📱 터치앤고</div><div class="value">${fmt(c.tng)}</div></div>
+    <div class="card"><div class="label">🏦 계좌/카드</div><div class="value">${fmt(c.bank)}</div></div>
+    <div class="card"><div class="label">합계</div><div class="value">${fmt(c.total)}</div></div>`;
 
-  const diff = s.total - lastBalance;
   const diffNote = document.getElementById('settlementDiffNote');
-  if (Math.abs(diff) < 1) {
-    diffNote.textContent = '✓ 장부 잔액과 실제 정산 금액이 일치합니다.';
-    diffNote.style.color = 'var(--income)';
-  } else {
-    diffNote.textContent = `⚠ 장부 잔액과 ${fmt(Math.abs(diff))} 차이가 있습니다 (${diff > 0 ? '실제가 더 많음' : '실제가 더 적음'}).`;
+  if (b.unattributedCount > 0) {
+    diffNote.textContent = `⚠ 결제/수령 방법이 입력 안 된 내역 ${b.unattributedCount}건(${fmt(Math.abs(b.unattributedAmount))})은 이 계산에서 빠져 있어요.`;
     diffNote.style.color = 'var(--expense)';
+  } else {
+    diffNote.textContent = '✓ 최근 확인 이후 입력된 내역이 모두 반영되어 있습니다.';
+    diffNote.style.color = 'var(--income)';
   }
 }
 

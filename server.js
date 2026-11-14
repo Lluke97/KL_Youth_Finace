@@ -20,6 +20,28 @@ const INCOME_CATEGORIES = ['회비', '후원금', '헌금', '기타수입'];
 // How a purchase/expense was actually paid for.
 const PAYMENT_METHODS = ['현금', '카드', '터치앤고'];
 
+// How money came in, for income entries.
+const RECEIVE_CHANNELS = ['현금', '터치앤고', '계좌이체'];
+
+// Every transaction's real-world "channel" (cash / Touch 'n Go / bank) is
+// normalized to one of these three buckets, used to auto-roll the actual
+// balance breakdown forward from the last manual settlement instead of
+// requiring a fresh manual count every time something is logged. A card
+// payment/receipt is treated as hitting the bank account.
+function paymentToChannel(payment) {
+  if (payment === '현금') return 'cash';
+  if (payment === '터치앤고') return 'tng';
+  if (payment === '카드') return 'bank';
+  return null;
+}
+function channelToBucket(channel) {
+  if (channel === '현금') return 'cash';
+  if (channel === '터치앤고') return 'tng';
+  if (channel === '계좌이체') return 'bank';
+  return null;
+}
+const CHANNEL_LABEL = { cash: '현금', tng: '터치앤고', bank: '계좌/카드' };
+
 // Receipt photos live on the same Railway volume as the JSON data, so they
 // survive redeploys. Optional — a purchase can be logged with no photo.
 const RECEIPTS_DIR = path.join(__dirname, 'data', 'receipts');
@@ -245,6 +267,52 @@ app.get('/api/payment-methods', (req, res) => {
   res.json(PAYMENT_METHODS);
 });
 
+app.get('/api/receive-channels', (req, res) => {
+  res.json(RECEIVE_CHANNELS);
+});
+
+// Auto-rolled actual-balance breakdown: start from the most recent manual
+// settlement (the last time someone actually counted cash/TnG/bank) and
+// add/subtract every transaction logged since then by its channel
+// (cash/tng/bank), instead of requiring a fresh manual count every time.
+// Transactions without a channel (most cafe-synced expenses, since
+// cafe-pos doesn't record a payment method for those) can't be placed in
+// any bucket and are called out separately so the gap is visible instead
+// of silently wrong.
+app.get('/api/balance-breakdown', (req, res) => {
+  const settlements = db.getSettlements().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const baseline = settlements[0] || null;
+  const baselineCreatedAt = baseline ? baseline.createdAt : null;
+  const txns = db.getTransactions();
+
+  let cash = 0, tng = 0, bank = 0, unattributedCount = 0, unattributedAmount = 0;
+  txns.forEach((t) => {
+    if (baselineCreatedAt && t.createdAt <= baselineCreatedAt) return; // already reflected in the baseline count
+    const signed = t.type === 'income' ? t.amount : -t.amount;
+    if (t.channel === 'cash') cash += signed;
+    else if (t.channel === 'tng') tng += signed;
+    else if (t.channel === 'bank') bank += signed;
+    else { unattributedCount += 1; unattributedAmount += signed; }
+  });
+
+  const baseCash = baseline ? baseline.cash : 0;
+  const baseTng = baseline ? baseline.tng : 0;
+  const baseBank = baseline ? (baseline.bank || 0) : 0;
+
+  res.json({
+    baseline: baseline ? { date: baseline.date, cash: baseCash, tng: baseTng, bank: baseBank } : null,
+    deltas: { cash, tng, bank },
+    current: {
+      cash: baseCash + cash,
+      tng: baseTng + tng,
+      bank: baseBank + bank,
+      total: baseCash + cash + (baseTng + tng) + (baseBank + bank)
+    },
+    unattributedCount,
+    unattributedAmount
+  });
+});
+
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
 // names/order. Opens straight into Excel/Numbers/Google Sheets.
 app.get('/api/admin/bulk-template.csv', maybeRequireAdmin, (req, res) => {
@@ -347,7 +415,7 @@ app.post('/api/webhook/cafe-settlement', (req, res) => {
 app.use('/api/admin', maybeRequireAdmin);
 
 app.post('/api/admin/transactions', (req, res) => {
-  const { date, type, source, tag, category, item, amount, memo, author } = req.body || {};
+  const { date, type, source, tag, category, item, amount, memo, author, channel } = req.body || {};
   if (!date || (type !== 'income' && type !== 'expense') || !category || typeof amount !== 'number' || amount <= 0) {
     return res.status(400).json({ error: 'date, type (income|expense), category and a positive amount are required' });
   }
@@ -362,6 +430,7 @@ app.post('/api/admin/transactions', (req, res) => {
     amount,
     memo: memo || '',
     author: author || '',
+    channel: ['cash', 'tng', 'bank'].includes(channel) ? channel : null,
     externalId: null,
     createdAt: new Date().toISOString()
   };
@@ -389,6 +458,7 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
     item,
     vendor: vendor || '',
     payment,
+    channel: paymentToChannel(payment),
     amount: amountNum,
     memo: memo || '',
     author: author || '',
@@ -407,10 +477,10 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
 // filed under source "membership" so it still groups with the existing
 // membership-fee history; everything else is "manual".
 app.post('/api/admin/income', (req, res) => {
-  const { date, category, payer, amount, memo, author } = req.body || {};
+  const { date, category, payer, amount, memo, author, channel } = req.body || {};
   const amountNum = parseFloat(amount);
-  if (!date || !INCOME_CATEGORIES.includes(category) || Number.isNaN(amountNum) || amountNum <= 0) {
-    return res.status(400).json({ error: `date, category (${INCOME_CATEGORIES.join('|')}) and a positive amount are required` });
+  if (!date || !INCOME_CATEGORIES.includes(category) || Number.isNaN(amountNum) || amountNum <= 0 || !RECEIVE_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `date, category (${INCOME_CATEGORIES.join('|')}), a positive amount, and channel (${RECEIVE_CHANNELS.join('|')}) are required` });
   }
   const entry = {
     id: 'tx_' + uid(),
@@ -421,6 +491,8 @@ app.post('/api/admin/income', (req, res) => {
     category,
     item: payer ? `${category} - ${payer}` : category,
     payer: payer || '',
+    receiveChannel: channel,
+    channel: channelToBucket(channel),
     amount: amountNum,
     memo: memo || '',
     author: author || '',
@@ -507,7 +579,7 @@ app.put('/api/admin/transactions/:id', (req, res) => {
   const txns = db.getTransactions();
   const idx = txns.findIndex((t) => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'amount', 'memo', 'author'];
+  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'channel', 'amount', 'memo', 'author'];
   fields.forEach((f) => { if (req.body && req.body[f] !== undefined) txns[idx][f] = req.body[f]; });
   db.saveTransactions(txns);
   res.json(txns[idx]);

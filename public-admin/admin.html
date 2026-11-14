@@ -88,8 +88,8 @@
   </section>
 
   <section class="block admin-section" id="settlement">
-    <h2>실제 잔액 정산 입력 (현금 / 터치앤고 / 은행)</h2>
-    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페 관리자 페이지에서 정산 후 "정산 전송" 버튼을 누르면 자동으로 들어오지만, 지금처럼 직접 넣고 싶을 때 여기서 입력하세요.</p>
+    <h2>실제 잔액 기준점 다시 맞추기 (현금 / 터치앤고 / 은행)</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">대시보드의 "실제 잔액 구성"은 평소엔 자동으로 계산돼요. 가끔 현금/계좌를 직접 세어봤는데 숫자가 안 맞을 때만, 여기서 그 시점 기준으로 다시 맞춰주세요. 카페 관리자 페이지의 "정산 전송" 버튼을 누르면 여기로 자동으로 들어오기도 합니다.</p>
     <form class="entry" id="settlementForm">
       <div>
         <label>날짜</label>
@@ -198,6 +198,10 @@
         <input type="number" name="amount" step="0.01" min="0.01" required>
       </div>
       <div>
+        <label>받은 방법</label>
+        <select name="channel" id="incomeChannel" required></select>
+      </div>
+      <div>
         <label>입력자</label>
         <input type="text" name="author" placeholder="이름">
       </div>
@@ -213,7 +217,7 @@
       <h3>최근 수입 (최근 10건 · 바로 수정/삭제 가능)</h3>
       <div class="mini-table-wrap">
         <table id="incomeRecentTable">
-          <thead><tr><th>날짜</th><th>카테고리</th><th>낸 사람</th><th class="amount">금액</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>카테고리</th><th>낸 사람</th><th>받은 방법</th><th class="amount">금액</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -252,6 +256,15 @@
       <div>
         <label>금액 (RM)</label>
         <input type="number" name="amount" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label>현금/터치앤고/계좌 (선택)</label>
+        <select name="channel">
+          <option value="">— 선택 안 함 —</option>
+          <option value="cash">현금</option>
+          <option value="tng">터치앤고</option>
+          <option value="bank">계좌/카드</option>
+        </select>
       </div>
       <div>
         <label>입력자</label>
@@ -375,6 +388,14 @@ async function exportSheet() {
 let purchaseCategoriesList = [];
 let incomeCategoriesList = [];
 let paymentMethodsList = [];
+let receiveChannelsList = [];
+
+async function loadReceiveChannels() {
+  const res = await fetch('/api/receive-channels');
+  receiveChannelsList = await res.json();
+  const select = document.getElementById('incomeChannel');
+  select.innerHTML = receiveChannelsList.map((c) => `<option value="${c}">${c}</option>`).join('');
+}
 
 async function loadPurchaseCategories() {
   const res = await fetch('/api/purchase-categories');
@@ -568,7 +589,7 @@ function txRowHtml(t) {
       <td>${t.date}</td>
       <td>${t.source}</td>
       <td>${t.category}</td>
-      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.payment ? ' · ' + t.payment : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
+      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.payment ? ' · ' + t.payment : ''}${t.receiveChannel ? ' · ' + t.receiveChannel : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
       <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
       <td class="tag-cell"></td>
       <td class="row-actions">
@@ -685,20 +706,25 @@ function purchaseEditRowHtml(t) {
       <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
 }
 
+const CHANNEL_BUCKET_LABEL = { cash: '현금', tng: '터치앤고', bank: '계좌/카드' };
+
 function incomeRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td>${t.date}</td>
       <td>${t.category}</td>
       <td>${t.payer || ''}</td>
+      <td>${t.receiveChannel || (t.channel ? CHANNEL_BUCKET_LABEL[t.channel] : '') || ''}</td>
       <td class="amount income">+${fmt(t.amount)}</td>
       <td class="row-actions">${miniActionsHtml(t.id)}</td></tr>`;
 }
 function incomeEditRowHtml(t) {
   const opts = incomeCategoriesList.map((c) => `<option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('');
+  const chOpts = ['cash', 'tng', 'bank'].map((b) => `<option value="${b}" ${b === t.channel ? 'selected' : ''}>${CHANNEL_BUCKET_LABEL[b]}</option>`).join('');
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
       <td><select class="edit-input" data-f="category">${opts}</select></td>
       <td><input type="text" class="edit-input" data-f="payer" value="${esc(t.payer)}"></td>
+      <td><select class="edit-input" data-f="channel">${chOpts}</select></td>
       <td><input type="number" step="0.01" class="edit-input amount-input" data-f="amount" value="${t.amount}"></td>
       <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
 }
@@ -729,7 +755,7 @@ function manualEditRowHtml(t) {
 
 const MINI_TABLES = {
   purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 6 },
-  incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 5 },
+  incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 6 },
   manualRecentTable: { row: manualRowHtml, edit: manualEditRowHtml, cols: 6 }
 };
 
@@ -805,7 +831,7 @@ async function loadAll() {
 }
 
 document.getElementById('fTag').addEventListener('change', renderTxTable);
-Promise.all([loadPurchaseCategories(), loadIncomeCategories(), loadPaymentMethods()]).then(loadAll);
+Promise.all([loadPurchaseCategories(), loadIncomeCategories(), loadPaymentMethods(), loadReceiveChannels()]).then(loadAll);
 loadSettlements();
 </script>
 </body>
