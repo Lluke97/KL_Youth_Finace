@@ -1,7 +1,7 @@
 {
-  "name": "청년부 예산",
-  "short_name": "청년부 예산",
-  "description": "청년부 예산 대시보드 / 구매·지출 / 정산 관리",
+  "name": "주섬주섬 Finance",
+  "short_name": "주섬주섬 Finance",
+  "description": "주섬주섬 Finance — 대시보드 / 구매·지출 / 정산 관리",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -32,8 +32,10 @@
   .btn-small { padding: 5px 9px; font-size: 11px; }
   .recent-wrap { margin-top: 16px; }
   .recent-wrap h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
-  .mini-table-wrap { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
-  .mini-table-wrap table { width: 100%; font-size: 12px; }
+  .mini-table-wrap { max-height: 280px; overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; }
+  .mini-table-wrap table { width: 100%; min-width: 480px; font-size: 12px; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; }
+  .table-scroll table { min-width: 560px; }
   .mini-table-wrap th, .mini-table-wrap td { padding: 6px 8px; }
   .mini-table-wrap thead th { position: sticky; top: 0; background: var(--card); }
   .mini-empty { font-size: 12px; color: var(--muted); padding: 10px; }
@@ -117,10 +119,12 @@
         <button class="primary" type="submit">정산 기록 추가</button>
       </div>
     </form>
-    <table id="settleTable" style="margin-top:12px;">
-      <thead><tr><th>날짜</th><th>소스</th><th class="amount">현금</th><th class="amount">TnG</th><th class="amount">은행</th><th class="amount">합계</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="table-scroll" style="margin-top:12px;">
+      <table id="settleTable">
+        <thead><tr><th>날짜</th><th>소스</th><th class="amount">현금</th><th class="amount">TnG</th><th class="amount">은행</th><th class="amount">합계</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <section class="block admin-section" id="purchase">
@@ -309,10 +313,12 @@
         <option value="needs-review">⚠️ 확인필요</option>
       </select>
     </div>
-    <table id="allTable">
-      <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th><th>분류</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="table-scroll">
+      <table id="allTable">
+        <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th><th>분류</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 </main>
 <div class="toast" id="toast"></div>
