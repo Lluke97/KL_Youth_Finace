@@ -108,6 +108,31 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// One-time fix: an early cafe-pos test pushed a settlement with all-zero
+// cash/TnG/bank via the webhook, which is now the "latest" settlement and
+// displaced the correct real balance on the dashboard. Guarded by an env
+// var so it only runs when explicitly asked, and idempotent via a fixed id
+// so a restart or redeploy never applies it twice.
+if (process.env.FIX_SETTLEMENT_20261114 === '1') {
+  const __settlements = db.getSettlements();
+  const __marker = 'settle_fix20261114';
+  if (!__settlements.some((s) => s.id === __marker)) {
+    __settlements.push({
+      id: __marker,
+      date: '2026-11-14',
+      cash: 1003.7,
+      tng: 1000,
+      bank: 15438.6,
+      total: 1003.7 + 1000 + 15438.6,
+      source: 'manual',
+      memo: '실제 잔액 수동 보정 (현금 1,003.70 / 터치앤고 1,000 / 은행 15,438.60)',
+      createdAt: new Date().toISOString()
+    });
+    db.saveSettlements(__settlements);
+    console.log('[youth-budget] applied FIX_SETTLEMENT_20261114 migration');
+  }
+}
+
 // ---------------- Public pages + read-only API (dashboard is open to all) ----------------
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/receipts', express.static(RECEIPTS_DIR));
