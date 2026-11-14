@@ -34,10 +34,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif;
   background: var(--bg);
   color: var(--text);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* On iOS, "add to home screen" standalone mode + a translucent status bar
+   means the OS status bar overlaps page content that isn't pushed down for
+   it — without this, the header renders right under/behind the status bar,
+   which is what made the title look doubled/garbled. */
 header.top {
-  padding: 16px 24px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 24px 16px;
   max-width: 960px;
   margin: 0 auto;
   display: flex;
