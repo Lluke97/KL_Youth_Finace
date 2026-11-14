@@ -165,7 +165,7 @@ async function loadTransactions() {
         <td>${t.date}</td>
         <td><span class="pill ${t.source}">${SOURCE_LABEL[t.source] || t.source}</span></td>
         <td>${t.category}</td>
-        <td>${t.item || ''}</td>
+        <td>${t.item || ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">🧾</a>` : ''}</td>
         <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
       </tr>`;
   });

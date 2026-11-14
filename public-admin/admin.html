@@ -70,6 +70,48 @@
   </section>
 
   <section class="block">
+    <h2>구매 지출 입력</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">간식·비품 등 청년부에서 쓴 돈을 기록하세요. 영수증 사진은 선택사항입니다.</p>
+    <form class="entry" id="purchaseForm" enctype="multipart/form-data">
+      <div>
+        <label>날짜</label>
+        <input type="date" name="date" required>
+      </div>
+      <div>
+        <label>카테고리</label>
+        <select name="category" id="purchaseCategory" required></select>
+      </div>
+      <div>
+        <label>구매처 (선택)</label>
+        <input type="text" name="vendor" placeholder="예: 다이소, OO식당">
+      </div>
+      <div>
+        <label>품목</label>
+        <input type="text" name="item" placeholder="예: 종이컵, 간식" required>
+      </div>
+      <div>
+        <label>금액 (RM)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label>입력자</label>
+        <input type="text" name="author" placeholder="이름">
+      </div>
+      <div class="full">
+        <label>영수증 사진 (선택)</label>
+        <input type="file" name="receipt" accept="image/*">
+      </div>
+      <div class="full">
+        <label>메모 (선택)</label>
+        <input type="text" name="memo">
+      </div>
+      <div class="full">
+        <button class="primary" type="submit">구매 지출 추가</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="block">
     <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
     <form class="entry" id="entryForm">
       <div>
@@ -157,6 +199,28 @@ async function exportSheet() {
   if (res.ok) toast(`구글 시트로 ${data.exported}행 내보냄`);
   else toast('오류: ' + data.error);
 }
+
+async function loadPurchaseCategories() {
+  const res = await fetch('/api/purchase-categories');
+  const categories = await res.json();
+  const select = document.getElementById('purchaseCategory');
+  select.innerHTML = categories.map((c) => `<option value="${c}">${c}</option>`).join('');
+}
+loadPurchaseCategories();
+
+document.getElementById('purchaseForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target); // multipart — browser sets the boundary, don't set Content-Type
+  const res = await fetch('/api/admin/purchases', { method: 'POST', body: fd });
+  if (res.ok) {
+    e.target.reset();
+    toast('구매 지출이 추가되었습니다');
+    loadAll();
+  } else {
+    const data = await res.json();
+    toast('오류: ' + data.error);
+  }
+});
 
 document.getElementById('entryForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -260,7 +324,7 @@ async function loadAll() {
       <td>${t.date}</td>
       <td>${t.source}</td>
       <td>${t.category}</td>
-      <td>${t.item || ''}</td>
+      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
       <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
       <td></td>
       <td><button class="danger" data-id="${t.id}">삭제</button></td>`;
