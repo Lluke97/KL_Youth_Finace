@@ -280,7 +280,16 @@ app.get('/api/receive-channels', (req, res) => {
 // any bucket and are called out separately so the gap is visible instead
 // of silently wrong.
 function computeBalanceBreakdown() {
-  const settlements = db.getSettlements().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Only a real physical-count baseline (manual entry or the cafe-pos
+  // settlement webhook) is used as the anchor — never an "auto" row, which
+  // is just a snapshot of this same calculation at an earlier moment. If an
+  // auto row were used as the anchor, deleting or editing a transaction
+  // that happened *before* that snapshot would have no way to flow through
+  // (it would already be "baked into" the frozen baseline forever). Always
+  // anchoring on the last real count and re-summing every transaction that
+  // still exists since then means a delete/edit anywhere is reflected
+  // immediately, with no stale numbers to clean up.
+  const settlements = db.getSettlements().filter((s) => s.source !== 'auto').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const baseline = settlements[0] || null;
   const baselineCreatedAt = baseline ? baseline.createdAt : null;
   const txns = db.getTransactions();
@@ -329,6 +338,7 @@ function recordAutoSettlement(txn) {
     bank: b.current.bank,
     total: b.current.total,
     source: 'auto',
+    txnId: txn.id,
     memo: `자동 반영: ${txn.item || txn.category || ''} (${txn.type === 'income' ? '+' : '-'}${txn.amount})`,
     createdAt: new Date().toISOString()
   };
@@ -619,6 +629,13 @@ app.put('/api/admin/transactions/:id', (req, res) => {
 app.delete('/api/admin/transactions/:id', (req, res) => {
   const txns = db.getTransactions().filter((t) => t.id !== req.params.id);
   db.saveTransactions(txns);
+  // Remove the 정산 row that was auto-created for this transaction too, so
+  // the settlement history doesn't keep a stale entry for something that
+  // no longer exists. (The live balance total is unaffected either way —
+  // see computeBalanceBreakdown — this is just keeping the history honest.)
+  const settlements = db.getSettlements();
+  const kept = settlements.filter((s) => s.txnId !== req.params.id);
+  if (kept.length !== settlements.length) db.saveSettlements(kept);
   res.json({ ok: true });
 });
 
@@ -726,6 +743,55 @@ app.post('/api/admin/export-sheet', async (req, res) => {
 
 app.get('/api/admin/sheets-status', (req, res) => {
   res.json({ configured: sheetsSync.isConfigured() });
+});
+
+// Excel export: no Google Cloud setup needed, just a direct file
+// download, split into one sheet per source so it reads like separate
+// "항목별" tabs — 전체내역 / 구매지출 / 수입 / 카페동기화 / 정산.
+app.get('/api/admin/export-xlsx', (req, res) => {
+  const txns = db.getTransactions().slice().sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  const settlements = db.getSettlements().slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const TX_HEADER = ['날짜', '구분', '소스', '분류', '카테고리', '항목', '거래처', '결제/수령', '금액', '메모', '입력자', '영수증'];
+  const toRow = (t) => ([
+    t.date,
+    t.type === 'income' ? '수입' : '지출',
+    t.source,
+    t.tag || '',
+    t.category,
+    t.item,
+    t.vendor || t.payer || '',
+    t.payment || t.receiveChannel || '',
+    t.type === 'income' ? t.amount : -t.amount,
+    t.memo || '',
+    t.author || '',
+    t.receiptUrl || ''
+  ]);
+
+  const purchases = txns.filter((t) => t.type === 'expense' && t.source === 'manual');
+  const income = txns.filter((t) => t.type === 'income');
+  const cafe = txns.filter((t) => t.source === 'cafe');
+
+  const wb = XLSX.utils.book_new();
+  const addSheet = (name, rows) => {
+    const sheet = XLSX.utils.aoa_to_sheet([TX_HEADER, ...rows.map(toRow)]);
+    XLSX.utils.book_append_sheet(wb, sheet, name);
+  };
+  addSheet('전체내역', txns);
+  addSheet('구매지출', purchases);
+  addSheet('수입', income);
+  addSheet('카페동기화', cafe);
+
+  const settleHeader = ['날짜', '소스', '현금', '터치앤고', '은행', '합계', '메모'];
+  const settleRows = settlements.map((s) => [s.date, s.source, s.cash, s.tng, s.bank == null ? '' : s.bank, s.total, s.memo || '']);
+  const settleSheet = XLSX.utils.aoa_to_sheet([settleHeader, ...settleRows]);
+  XLSX.utils.book_append_sheet(wb, settleSheet, '정산');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const filename = `주섬주섬청년부_예산_${todayStr()}.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(buf);
 });
 
 // Admin page itself needs auth before the browser even gets the HTML
