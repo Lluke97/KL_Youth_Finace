@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>청년부 예산 대시보드</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>청년부 예산 대시보드</h1>
+  <p>카페 수입/지출 + 회비 + 기타 내역을 한눈에 · <a class="admin-link" href="/admin">관리자 입력 →</a></p>
+</header>
+<main>
+  <div class="warn-banner" id="reviewBanner"></div>
+
+  <div class="balance-card">
+    <div class="label">현재 잔액</div>
+    <div class="value" id="balanceValue">—</div>
+  </div>
+
+  <div class="cards" id="sourceCards"></div>
+
+  <section class="block">
+    <h2>월별 수입/지출</h2>
+    <div class="bars" id="monthlyChart"></div>
+  </section>
+
+  <section class="block">
+    <h2>구분별 요약 (카페운영 / 청년부 일반지출 / 확인필요)</h2>
+    <table id="tagTable">
+      <thead><tr><th>구분</th><th class="amount">수입</th><th class="amount">지출</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="block">
+    <h2>최근 내역</h2>
+    <div class="filters">
+      <select id="fSource">
+        <option value="">전체 소스</option>
+        <option value="cafe">카페</option>
+        <option value="membership">회비</option>
+        <option value="manual">수동입력</option>
+        <option value="carryover">이월금</option>
+      </select>
+      <select id="fType">
+        <option value="">전체</option>
+        <option value="income">수입</option>
+        <option value="expense">지출</option>
+      </select>
+    </div>
+    <table id="txTable">
+      <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleString();
+
+const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금' };
+const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
+
+async function loadSummary() {
+  const res = await fetch('/api/summary');
+  const s = await res.json();
+
+  document.getElementById('balanceValue').textContent = fmt(s.balance);
+
+  const cardsEl = document.getElementById('sourceCards');
+  cardsEl.innerHTML = '';
+  Object.entries(s.bySource).forEach(([src, v]) => {
+    cardsEl.innerHTML += `
+      <div class="card">
+        <div class="label">${SOURCE_LABEL[src] || src}</div>
+        <div class="value income">+${fmt(v.income)}</div>
+        <div class="value expense">-${fmt(v.expense)}</div>
+      </div>`;
+  });
+
+  const tagBody = document.querySelector('#tagTable tbody');
+  tagBody.innerHTML = '';
+  Object.entries(s.byTag).forEach(([tag, v]) => {
+    tagBody.innerHTML += `<tr><td>${TAG_LABEL[tag] || tag}</td><td class="amount income">${fmt(v.income)}</td><td class="amount expense">${fmt(v.expense)}</td></tr>`;
+  });
+
+  const banner = document.getElementById('reviewBanner');
+  if (s.needsReviewCount > 0) {
+    banner.style.display = 'block';
+    banner.textContent = `카페에서 가져온 지출 중 ${s.needsReviewCount}건이 "카페운영/청년부지출" 분류가 필요합니다. 관리자 페이지에서 확인해주세요.`;
+  }
+
+  // Monthly stacked bars
+  const chart = document.getElementById('monthlyChart');
+  chart.innerHTML = '';
+  const maxVal = Math.max(1, ...s.monthly.map((m) => Math.max(m.income, m.expense)));
+  s.monthly.slice(-8).forEach((m) => {
+    const incH = Math.round((m.income / maxVal) * 100);
+    const expH = Math.round((m.expense / maxVal) * 100);
+    chart.innerHTML += `
+      <div class="bar-group">
+        <div class="stack">
+          <div class="seg income" style="height:${incH}px"></div>
+        </div>
+        <div class="stack">
+          <div class="seg expense" style="height:${expH}px"></div>
+        </div>
+        <div class="month-label">${m.month.slice(5)}월</div>
+      </div>`;
+  });
+}
+
+async function loadTransactions() {
+  const source = document.getElementById('fSource').value;
+  const type = document.getElementById('fType').value;
+  const params = new URLSearchParams();
+  if (source) params.set('source', source);
+  if (type) params.set('type', type);
+  const res = await fetch('/api/transactions?' + params.toString());
+  const txns = await res.json();
+  const body = document.querySelector('#txTable tbody');
+  body.innerHTML = '';
+  txns.slice(0, 50).forEach((t) => {
+    body.innerHTML += `
+      <tr>
+        <td>${t.date}</td>
+        <td><span class="pill ${t.source}">${SOURCE_LABEL[t.source] || t.source}</span></td>
+        <td>${t.category}</td>
+        <td>${t.item || ''}</td>
+        <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
+      </tr>`;
+  });
+}
+
+document.getElementById('fSource').addEventListener('change', loadTransactions);
+document.getElementById('fType').addEventListener('change', loadTransactions);
+
+loadSummary();
+loadTransactions();
+</script>
+</body>
+</html>

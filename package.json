@@ -1,0 +1,16 @@
+{
+  "name": "youth-budget",
+  "version": "1.0.0",
+  "private": true,
+  "description": "청년부 예산 관리 - 카페 수입/지출, 회비, 수동 입력을 모아 잔액을 추적",
+  "scripts": {
+    "start": "node server.js",
+    "import-excel": "node scripts/import-excel.js",
+    "sync-cafe": "node scripts/sync-cafe.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "xlsx": "^0.18.5",
+    "googleapis": "^140.0.1"
+  }
+}

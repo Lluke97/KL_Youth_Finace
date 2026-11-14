@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>청년부 예산 - 관리자</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  form.entry { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  form.entry label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
+  form.entry input, form.entry select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+  form.entry .full { grid-column: 1 / -1; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600; }
+  button.primary { background: var(--accent); color: white; }
+  button.ghost { background: #f3f4f6; color: var(--text); }
+  button.danger { background: #fee2e2; color: #b91c1c; }
+  .row-actions { display: flex; gap: 6px; }
+  select.tag-select { font-size: 11px; padding: 3px 6px; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #111827; color: white; padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>청년부 예산 - 관리자</h1>
+  <p><a class="admin-link" href="/">← 대시보드로</a></p>
+</header>
+<main>
+  <section class="block">
+    <h2>카페 데이터 동기화 / 백업</h2>
+    <div class="row-actions">
+      <button class="primary" onclick="syncCafe()">카페(jusumcafe)에서 새 내역 가져오기</button>
+      <button class="ghost" onclick="exportSheet()">구글 시트로 내보내기</button>
+    </div>
+    <p id="syncResult" style="font-size:13px;color:var(--muted);margin-top:8px;"></p>
+  </section>
+
+  <section class="block">
+    <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
+    <form class="entry" id="entryForm">
+      <div>
+        <label>날짜</label>
+        <input type="date" name="date" required>
+      </div>
+      <div>
+        <label>구분</label>
+        <select name="type" required>
+          <option value="income">수입</option>
+          <option value="expense">지출</option>
+        </select>
+      </div>
+      <div>
+        <label>소스</label>
+        <select name="source" required>
+          <option value="membership">회비</option>
+          <option value="manual">수동입력(기타)</option>
+        </select>
+      </div>
+      <div>
+        <label>카테고리</label>
+        <input type="text" name="category" placeholder="예: 회비, 간식비" required>
+      </div>
+      <div class="full">
+        <label>항목/메모</label>
+        <input type="text" name="item" placeholder="예: 11월 회비 - 홍길동">
+      </div>
+      <div>
+        <label>금액 (RM)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label>입력자</label>
+        <input type="text" name="author" placeholder="이름">
+      </div>
+      <div class="full">
+        <button class="primary" type="submit">추가</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="block">
+    <h2>전체 내역 (분류 수정 / 삭제)</h2>
+    <div class="filters">
+      <select id="fTag">
+        <option value="">전체 분류</option>
+        <option value="cafe-ops">카페 운영</option>
+        <option value="youth-general">청년부 일반지출</option>
+        <option value="needs-review">⚠️ 확인필요</option>
+      </select>
+    </div>
+    <table id="allTable">
+      <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th><th>분류</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const fmt = (n) => 'RM' + Math.round(n).toLocaleString();
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => (t.style.display = 'none'), 3000);
+}
+
+async function syncCafe() {
+  const res = await fetch('/api/admin/sync-cafe', { method: 'POST' });
+  const data = await res.json();
+  const el = document.getElementById('syncResult');
+  if (res.ok) {
+    el.textContent = `${data.added}건 추가됨 (분류 확인 필요: ${data.needsReview}건)`;
+    loadAll();
+  } else {
+    el.textContent = '오류: ' + data.error;
+  }
+}
+
+async function exportSheet() {
+  const res = await fetch('/api/admin/export-sheet', { method: 'POST' });
+  const data = await res.json();
+  if (res.ok) toast(`구글 시트로 ${data.exported}행 내보냄`);
+  else toast('오류: ' + data.error);
+}
+
+document.getElementById('entryForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.amount = parseFloat(body.amount);
+  const res = await fetch('/api/admin/transactions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    e.target.reset();
+    toast('추가되었습니다');
+    loadAll();
+  } else {
+    const data = await res.json();
+    toast('오류: ' + data.error);
+  }
+});
+
+const TAG_OPTIONS = ['', 'cafe-ops', 'youth-general', 'needs-review'];
+const TAG_LABEL = { '': '미분류', 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 확인필요' };
+
+async function retag(id, tag) {
+  await fetch('/api/admin/transactions/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag: tag || null })
+  });
+  toast('분류가 수정되었습니다');
+}
+
+async function removeTx(id) {
+  if (!confirm('삭제할까요?')) return;
+  await fetch('/api/admin/transactions/' + id, { method: 'DELETE' });
+  loadAll();
+}
+
+async function loadAll() {
+  const tag = document.getElementById('fTag').value;
+  const params = new URLSearchParams();
+  if (tag) params.set('tag', tag);
+  const res = await fetch('/api/transactions?' + params.toString());
+  const txns = await res.json();
+  const body = document.querySelector('#allTable tbody');
+  body.innerHTML = '';
+  txns.forEach((t) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${t.date}</td>
+      <td>${t.source}</td>
+      <td>${t.category}</td>
+      <td>${t.item || ''}</td>
+      <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
+      <td></td>
+      <td><button class="danger" data-id="${t.id}">삭제</button></td>`;
+    const tagCell = tr.children[5];
+    const select = document.createElement('select');
+    select.className = 'tag-select';
+    TAG_OPTIONS.forEach((opt) => {
+      const o = document.createElement('option');
+      o.value = opt;
+      o.textContent = TAG_LABEL[opt];
+      if ((t.tag || '') === opt) o.selected = true;
+      select.appendChild(o);
+    });
+    select.addEventListener('change', () => retag(t.id, select.value));
+    tagCell.appendChild(select);
+    tr.querySelector('button.danger').addEventListener('click', () => removeTx(t.id));
+    body.appendChild(tr);
+  });
+}
+
+document.getElementById('fTag').addEventListener('change', loadAll);
+loadAll();
+</script>
+</body>
+</html>
