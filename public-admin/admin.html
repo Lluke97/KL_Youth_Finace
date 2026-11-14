@@ -47,6 +47,7 @@
         <a href="/">🏠 대시보드</a>
         <a href="/admin#sync">🔄 카페 동기화</a>
         <a href="/admin#purchase">🧾 구매 지출 입력</a>
+        <a href="/admin#income">💸 수입 입력</a>
         <a href="/admin#settlement">💰 정산 입력</a>
         <a href="/admin#manual">✏️ 직접 입력</a>
         <a href="/admin#all">📋 전체 내역</a>
@@ -58,6 +59,7 @@
   <a class="tab" data-section="sync" href="#sync">🔄 동기화</a>
   <a class="tab" data-section="settlement" href="#settlement">💰 정산</a>
   <a class="tab" data-section="purchase" href="#purchase">🧾 구매 지출</a>
+  <a class="tab" data-section="income" href="#income">💸 수입</a>
   <a class="tab" data-section="manual" href="#manual">✏️ 직접 입력</a>
   <a class="tab" data-section="all" href="#all">📋 전체 내역</a>
 </nav>
@@ -148,6 +150,40 @@
     </form>
   </section>
 
+  <section class="block admin-section" id="income">
+    <h2>수입 입력</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">회비, 후원금, 헌금 등 들어온 돈을 기록하세요.</p>
+    <form class="entry" id="incomeForm">
+      <div>
+        <label>날짜</label>
+        <input type="date" name="date" required>
+      </div>
+      <div>
+        <label>카테고리</label>
+        <select name="category" id="incomeCategory" required></select>
+      </div>
+      <div>
+        <label>낸 사람 / 후원자 (선택)</label>
+        <input type="text" name="payer" placeholder="예: 홍길동">
+      </div>
+      <div>
+        <label>금액 (RM)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label>입력자</label>
+        <input type="text" name="author" placeholder="이름">
+      </div>
+      <div class="full">
+        <label>메모 (선택)</label>
+        <input type="text" name="memo" placeholder="예: 11월 회비">
+      </div>
+      <div class="full">
+        <button class="primary" type="submit">수입 추가</button>
+      </div>
+    </form>
+  </section>
+
   <section class="block admin-section" id="manual">
     <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
     <form class="entry" id="entryForm">
@@ -219,7 +255,7 @@ document.addEventListener('click', function () {
 
 // ---- show one menu section at a time (driven by the #hash, same sections
 // the hamburger menu links to) ----
-const SECTION_IDS = ['sync', 'settlement', 'purchase', 'manual', 'all'];
+const SECTION_IDS = ['sync', 'settlement', 'purchase', 'income', 'manual', 'all'];
 function showSection(id) {
   if (!SECTION_IDS.includes(id)) id = SECTION_IDS[0];
   SECTION_IDS.forEach((s) => {
@@ -281,6 +317,34 @@ document.getElementById('purchaseForm').addEventListener('submit', async (e) => 
   if (res.ok) {
     e.target.reset();
     toast('구매 지출이 추가되었습니다');
+    loadAll();
+  } else {
+    const data = await res.json();
+    toast('오류: ' + data.error);
+  }
+});
+
+async function loadIncomeCategories() {
+  const res = await fetch('/api/income-categories');
+  const categories = await res.json();
+  const select = document.getElementById('incomeCategory');
+  select.innerHTML = categories.map((c) => `<option value="${c}">${c}</option>`).join('');
+}
+loadIncomeCategories();
+
+document.getElementById('incomeForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.amount = parseFloat(body.amount);
+  const res = await fetch('/api/admin/income', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    e.target.reset();
+    toast('수입이 추가되었습니다');
     loadAll();
   } else {
     const data = await res.json();
@@ -390,7 +454,7 @@ async function loadAll() {
       <td>${t.date}</td>
       <td>${t.source}</td>
       <td>${t.category}</td>
-      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
+      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
       <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
       <td></td>
       <td><button class="danger" data-id="${t.id}">삭제</button></td>`;

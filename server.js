@@ -11,6 +11,11 @@ const sheetsSync = require('./lib/sheetsSync');
 // from the generic manual-entry form, which is mainly for 회비/income).
 const PURCHASE_CATEGORIES = ['식비·다과', '교통비', '행사비', '비품·소모품', '후원·지원금', '기타'];
 
+// Income categories: 회비 (membership dues) and 후원/헌금 (outside
+// sponsorship/offerings) are the two main real-world sources besides the
+// cafe, so they get their own preset dropdown instead of free-text.
+const INCOME_CATEGORIES = ['회비', '후원금', '헌금', '기타수입'];
+
 // Receipt photos live on the same Railway volume as the JSON data, so they
 // survive redeploys. Optional — a purchase can be logged with no photo.
 const RECEIPTS_DIR = path.join(__dirname, 'data', 'receipts');
@@ -139,6 +144,10 @@ app.use('/receipts', express.static(RECEIPTS_DIR));
 
 app.get('/api/purchase-categories', (req, res) => {
   res.json(PURCHASE_CATEGORIES);
+});
+
+app.get('/api/income-categories', (req, res) => {
+  res.json(INCOME_CATEGORIES);
 });
 
 app.get('/api/transactions', (req, res) => {
@@ -284,11 +293,42 @@ app.post('/api/admin/purchases', upload.single('receipt'), (req, res) => {
   res.status(201).json(entry);
 });
 
+// Dedicated income entry: preset categories (회비/후원금/헌금/기타수입)
+// instead of the free-text category in the generic form above. 회비 is
+// filed under source "membership" so it still groups with the existing
+// membership-fee history; everything else is "manual".
+app.post('/api/admin/income', (req, res) => {
+  const { date, category, payer, amount, memo, author } = req.body || {};
+  const amountNum = parseFloat(amount);
+  if (!date || !INCOME_CATEGORIES.includes(category) || Number.isNaN(amountNum) || amountNum <= 0) {
+    return res.status(400).json({ error: `date, category (${INCOME_CATEGORIES.join('|')}) and a positive amount are required` });
+  }
+  const entry = {
+    id: 'tx_' + uid(),
+    date,
+    type: 'income',
+    source: category === '회비' ? 'membership' : 'manual',
+    tag: 'youth-general',
+    category,
+    item: payer ? `${category} - ${payer}` : category,
+    payer: payer || '',
+    amount: amountNum,
+    memo: memo || '',
+    author: author || '',
+    externalId: null,
+    createdAt: new Date().toISOString()
+  };
+  const txns = db.getTransactions();
+  txns.push(entry);
+  db.saveTransactions(txns);
+  res.status(201).json(entry);
+});
+
 app.put('/api/admin/transactions/:id', (req, res) => {
   const txns = db.getTransactions();
   const idx = txns.findIndex((t) => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'amount', 'memo', 'author'];
+  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'amount', 'memo', 'author'];
   fields.forEach((f) => { if (req.body && req.body[f] !== undefined) txns[idx][f] = req.body[f]; });
   db.saveTransactions(txns);
   res.json(txns[idx]);
