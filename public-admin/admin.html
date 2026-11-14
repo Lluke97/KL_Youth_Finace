@@ -35,6 +35,41 @@
   </section>
 
   <section class="block">
+    <h2>실제 잔액 정산 입력 (현금 / 터치앤고 / 은행)</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페 정산 버튼을 누르면 자동으로도 들어오지만, 지금처럼 직접 넣고 싶을 때 여기서 입력하세요.</p>
+    <form class="entry" id="settlementForm">
+      <div>
+        <label>날짜</label>
+        <input type="date" name="date" required>
+      </div>
+      <div></div>
+      <div>
+        <label>💵 현금 (RM)</label>
+        <input type="number" name="cash" step="0.01" required>
+      </div>
+      <div>
+        <label>📱 터치앤고 (RM)</label>
+        <input type="number" name="tng" step="0.01" required>
+      </div>
+      <div>
+        <label>🏦 은행 (RM)</label>
+        <input type="number" name="bank" step="0.01" required>
+      </div>
+      <div class="full">
+        <label>메모</label>
+        <input type="text" name="memo" placeholder="예: 직접 확인한 잔액">
+      </div>
+      <div class="full">
+        <button class="primary" type="submit">정산 기록 추가</button>
+      </div>
+    </form>
+    <table id="settleTable" style="margin-top:12px;">
+      <thead><tr><th>날짜</th><th>소스</th><th class="amount">현금</th><th class="amount">TnG</th><th class="amount">은행</th><th class="amount">합계</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="block">
     <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
     <form class="entry" id="entryForm">
       <div>
@@ -143,6 +178,56 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
   }
 });
 
+const SOURCE_LABEL = { 'cafe-pos': '카페 자동', manual: '직접입력' };
+
+document.getElementById('settlementForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.cash = parseFloat(body.cash);
+  body.tng = parseFloat(body.tng);
+  body.bank = parseFloat(body.bank);
+  const res = await fetch('/api/admin/settlements', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    e.target.reset();
+    toast('정산 기록이 추가되었습니다');
+    loadSettlements();
+  } else {
+    const data = await res.json();
+    toast('오류: ' + data.error);
+  }
+});
+
+async function removeSettlement(id) {
+  if (!confirm('삭제할까요?')) return;
+  await fetch('/api/admin/settlements/' + id, { method: 'DELETE' });
+  loadSettlements();
+}
+
+async function loadSettlements() {
+  const res = await fetch('/api/settlements');
+  const list = await res.json();
+  const body = document.querySelector('#settleTable tbody');
+  body.innerHTML = '';
+  list.forEach((s) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${s.date}</td>
+      <td>${SOURCE_LABEL[s.source] || s.source}</td>
+      <td class="amount">${fmt(s.cash)}</td>
+      <td class="amount">${fmt(s.tng)}</td>
+      <td class="amount">${s.bank == null ? '—' : fmt(s.bank)}</td>
+      <td class="amount">${fmt(s.total)}</td>
+      <td><button class="danger" data-id="${s.id}">삭제</button></td>`;
+    tr.querySelector('button.danger').addEventListener('click', () => removeSettlement(s.id));
+    body.appendChild(tr);
+  });
+}
+
 const TAG_OPTIONS = ['', 'cafe-ops', 'youth-general', 'needs-review'];
 const TAG_LABEL = { '': '미분류', 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 확인필요' };
 
@@ -198,6 +283,7 @@ async function loadAll() {
 
 document.getElementById('fTag').addEventListener('change', loadAll);
 loadAll();
+loadSettlements();
 </script>
 </body>
 </html>

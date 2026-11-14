@@ -15,14 +15,20 @@ Railway 볼륨)으로 만들어졌습니다.
 - `lib/sheetsSync.js` — 구글 시트로 전체 내역을 내보내는 기능(서비스 계정 필요, 아래 참고).
 - `scripts/import-excel.js` — 엑셀 과거 데이터 1회 임포트용 (재실행해도 중복 안 됨).
 - `scripts/sync-cafe.js` — cafe-pos 동기화를 커맨드라인/크론에서 실행.
+- 정산(실제 현금/터치앤고/은행 잔액)은 거래 장부와 별도로 `settlements`에 쌓입니다.
+  cafe-pos에서 "정산하기"를 누르면 `/api/webhook/cafe-settlement`로 자동 전달되고,
+  관리자 화면에서 직접 입력할 수도 있습니다. `seed-data/settlements.seed.json`은
+  볼륨이 비어있을 때만 쓰이는 초기값입니다.
 
 ## 환경변수
 | 변수 | 설명 |
 |---|---|
 | `ADMIN_USER`, `ADMIN_PASS` | 관리자 페이지(`/admin`) 로그인 |
 | `ADMIN_USER2`, `ADMIN_PASS2` | (선택) 보조 관리자 계정 |
+| `REQUIRE_ADMIN_AUTH` | `false`로 설정하면 `/admin`과 관리자 API 전부 로그인 없이 열림 (기본값: 로그인 필요) |
 | `CAFE_BASE_URL` | 기본값 `https://jusumcafe.up.railway.app` |
 | `CAFE_ADMIN_USER`, `CAFE_ADMIN_PASS` | cafe-pos 쪽 `ADMIN_USER`/`ADMIN_PASS`와 동일한 값 |
+| `SETTLEMENT_WEBHOOK_SECRET` | cafe-pos가 정산 내용을 보낼 때 쓰는 공유 비밀값 (cafe-pos의 같은 변수와 일치해야 함) |
 | `GOOGLE_SHEET_ID` | (선택) 내보낼 구글 시트 ID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | (선택) 구글 서비스계정 키 JSON 전체 내용 |
 

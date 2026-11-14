@@ -66,9 +66,17 @@ const DEFAULT_SETTINGS = {
   carryoverSet: false
 };
 
+// A settlement: the actual cash / Touch 'n Go / bank balance at a point in
+// time (실사 금액) — distinct from the transaction ledger above, which is
+// built from recorded income/expense rows. The two should track each other,
+// but a settlement is the "ground truth" check: what's actually on hand.
+// { id, date, cash, tng, bank, total, source: 'cafe-pos'|'manual', memo, createdAt }
 module.exports = {
   getTransactions: () => readJSON('transactions', loadSeed('transactions', [])),
   saveTransactions: (txns) => writeJSON('transactions', txns),
+
+  getSettlements: () => readJSON('settlements', loadSeed('settlements', [])),
+  saveSettlements: (settlements) => writeJSON('settlements', settlements),
 
   getSettings: () => Object.assign({}, DEFAULT_SETTINGS, readJSON('settings', DEFAULT_SETTINGS)),
   saveSettings: (settings) => writeJSON('settings', settings)

@@ -1,0 +1,13 @@
+[
+  {
+    "id": "settle_seed0001",
+    "date": "2026-11-14",
+    "cash": 1003.7,
+    "tng": 1000,
+    "bank": 15438.6,
+    "total": 17442.3,
+    "source": "manual",
+    "memo": "초기 입력 (Luke)",
+    "createdAt": "2026-11-14T00:00:00.000Z"
+  }
+]

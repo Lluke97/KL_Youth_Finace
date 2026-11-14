@@ -21,6 +21,12 @@ if (process.env.ADMIN_USER2 && process.env.ADMIN_PASS2) {
   ADMIN_ACCOUNTS.push({ user: process.env.ADMIN_USER2, pass: process.env.ADMIN_PASS2 });
 }
 
+// Toggle: set REQUIRE_ADMIN_AUTH=false (Railway variable) to open /admin and
+// /api/admin/* with no login — e.g. while only Luke/집사님 are using it and
+// the login prompt is just friction. Set it back to anything else (or
+// remove it) to require the admin login again; no code change needed.
+const REQUIRE_ADMIN_AUTH = process.env.REQUIRE_ADMIN_AUTH !== 'false';
+
 function safeEqual(a, b) {
   return crypto.timingSafeEqual(Buffer.from(String(a).padEnd(128)), Buffer.from(String(b).padEnd(128)));
 }
@@ -65,6 +71,18 @@ function requireAdmin(req, res, next) {
 
   res.set('WWW-Authenticate', 'Basic realm="Youth Budget Admin"');
   return res.status(401).send('Authentication required.');
+}
+
+function maybeRequireAdmin(req, res, next) {
+  if (!REQUIRE_ADMIN_AUTH) return next();
+  return requireAdmin(req, res, next);
+}
+
+// Asia/Kuala_Lumpur "today", same convention as cafe-pos.
+const MY_TZ = 'Asia/Kuala_Lumpur';
+const myDateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: MY_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+function todayStr() {
+  return myDateFormatter.format(new Date());
 }
 
 function uid() {
@@ -115,8 +133,46 @@ app.get('/api/summary', (req, res) => {
   res.json({ balance, bySource, byTag, monthly: monthlyList, needsReviewCount, transactionCount: txns.length });
 });
 
+// Settlements (실제 현금/터치앤고/은행 잔액) — read-only, same access as the
+// rest of the dashboard.
+app.get('/api/settlements', (req, res) => {
+  const settlements = db.getSettlements().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json(settlements);
+});
+
+// Cafe-pos pushes a completed settlement here automatically. This is NOT
+// behind the admin login — cafe-pos is a different server calling in, not a
+// browser — it's behind its own shared-secret header instead.
+app.post('/api/webhook/cafe-settlement', (req, res) => {
+  const secret = process.env.SETTLEMENT_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ error: 'SETTLEMENT_WEBHOOK_SECRET not configured on this server' });
+  if (req.headers['x-webhook-secret'] !== secret) {
+    return res.status(401).json({ error: 'invalid webhook secret' });
+  }
+  const { date, cash, tng, bank, memo } = req.body || {};
+  if (typeof cash !== 'number' || typeof tng !== 'number') {
+    return res.status(400).json({ error: 'cash and tng must be numbers' });
+  }
+  const bankVal = typeof bank === 'number' ? bank : null;
+  const entry = {
+    id: 'settle_' + uid(),
+    date: date || todayStr(),
+    cash,
+    tng,
+    bank: bankVal,
+    total: cash + tng + (bankVal || 0),
+    source: 'cafe-pos',
+    memo: memo || '카페 정산 자동 반영',
+    createdAt: new Date().toISOString()
+  };
+  const list = db.getSettlements();
+  list.push(entry);
+  db.saveSettlements(list);
+  res.status(201).json(entry);
+});
+
 // ---------------- Admin-only API ----------------
-app.use('/api/admin', requireAdmin);
+app.use('/api/admin', maybeRequireAdmin);
 
 app.post('/api/admin/transactions', (req, res) => {
   const { date, type, source, tag, category, item, amount, memo, author } = req.body || {};
@@ -160,6 +216,35 @@ app.delete('/api/admin/transactions/:id', (req, res) => {
 });
 
 // Pull new orders/expenses from cafe-pos.
+// Manual settlement entry (e.g. seeding today's actual balances by hand).
+app.post('/api/admin/settlements', (req, res) => {
+  const { date, cash, tng, bank, memo } = req.body || {};
+  if (typeof cash !== 'number' || typeof tng !== 'number' || typeof bank !== 'number') {
+    return res.status(400).json({ error: 'cash, tng, bank must all be numbers' });
+  }
+  const entry = {
+    id: 'settle_' + uid(),
+    date: date || todayStr(),
+    cash,
+    tng,
+    bank,
+    total: cash + tng + bank,
+    source: 'manual',
+    memo: memo || '',
+    createdAt: new Date().toISOString()
+  };
+  const list = db.getSettlements();
+  list.push(entry);
+  db.saveSettlements(list);
+  res.status(201).json(entry);
+});
+
+app.delete('/api/admin/settlements/:id', (req, res) => {
+  const list = db.getSettlements().filter((s) => s.id !== req.params.id);
+  db.saveSettlements(list);
+  res.json({ ok: true });
+});
+
 app.post('/api/admin/sync-cafe', async (req, res) => {
   const baseUrl = process.env.CAFE_BASE_URL || 'https://jusumcafe.up.railway.app';
   const user = process.env.CAFE_ADMIN_USER;
@@ -202,11 +287,12 @@ app.get('/api/admin/sheets-status', (req, res) => {
   res.json({ configured: sheetsSync.isConfigured() });
 });
 
-// Admin page itself needs auth before the browser even gets the HTML.
-app.get('/admin', requireAdmin, (req, res) => {
+// Admin page itself needs auth before the browser even gets the HTML
+// (unless REQUIRE_ADMIN_AUTH=false — see above).
+app.get('/admin', maybeRequireAdmin, (req, res) => {
   res.sendFile(path.join(__dirname, 'public-admin', 'admin.html'));
 });
-app.use('/admin-assets', requireAdmin, express.static(path.join(__dirname, 'public-admin')));
+app.use('/admin-assets', maybeRequireAdmin, express.static(path.join(__dirname, 'public-admin')));
 
 app.listen(PORT, () => {
   console.log(`[youth-budget] listening on http://localhost:${PORT}`);

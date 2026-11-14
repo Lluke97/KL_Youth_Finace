@@ -15,9 +15,16 @@
   <div class="warn-banner" id="reviewBanner"></div>
 
   <div class="balance-card">
-    <div class="label">현재 잔액</div>
+    <div class="label">현재 잔액 (장부 기준)</div>
     <div class="value" id="balanceValue">—</div>
   </div>
+
+  <section class="block" id="settlementBlock" style="display:none;">
+    <h2>실제 잔액 구성 (최근 정산)</h2>
+    <div id="settlementNote" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></div>
+    <div class="cards" id="settlementCards"></div>
+    <div id="settlementDiffNote" style="font-size:12px;margin-top:10px;"></div>
+  </section>
 
   <div class="cards" id="sourceCards"></div>
 
@@ -67,6 +74,7 @@ async function loadSummary() {
   const s = await res.json();
 
   document.getElementById('balanceValue').textContent = fmt(s.balance);
+  lastBalance = s.balance;
 
   const cardsEl = document.getElementById('sourceCards');
   cardsEl.innerHTML = '';
@@ -111,6 +119,36 @@ async function loadSummary() {
   });
 }
 
+let lastBalance = 0;
+
+async function loadSettlement() {
+  const res = await fetch('/api/settlements');
+  const list = await res.json();
+  const block = document.getElementById('settlementBlock');
+  if (!list.length) { block.style.display = 'none'; return; }
+  block.style.display = 'block';
+  const s = list[0];
+  const SOURCE_NOTE = { 'cafe-pos': '카페 정산에서 자동 반영', manual: '직접 입력' };
+  document.getElementById('settlementNote').textContent = `${s.date} 기준 (${SOURCE_NOTE[s.source] || s.source})`;
+
+  const cardsEl = document.getElementById('settlementCards');
+  cardsEl.innerHTML = `
+    <div class="card"><div class="label">💵 현금</div><div class="value">${fmt(s.cash)}</div></div>
+    <div class="card"><div class="label">📱 터치앤고</div><div class="value">${fmt(s.tng)}</div></div>
+    <div class="card"><div class="label">🏦 은행</div><div class="value">${s.bank == null ? '—' : fmt(s.bank)}</div></div>
+    <div class="card"><div class="label">합계</div><div class="value">${fmt(s.total)}</div></div>`;
+
+  const diff = s.total - lastBalance;
+  const diffNote = document.getElementById('settlementDiffNote');
+  if (Math.abs(diff) < 1) {
+    diffNote.textContent = '✓ 장부 잔액과 실제 정산 금액이 일치합니다.';
+    diffNote.style.color = 'var(--income)';
+  } else {
+    diffNote.textContent = `⚠ 장부 잔액과 ${fmt(Math.abs(diff))} 차이가 있습니다 (${diff > 0 ? '실제가 더 많음' : '실제가 더 적음'}).`;
+    diffNote.style.color = 'var(--expense)';
+  }
+}
+
 async function loadTransactions() {
   const source = document.getElementById('fSource').value;
   const type = document.getElementById('fType').value;
@@ -136,7 +174,7 @@ async function loadTransactions() {
 document.getElementById('fSource').addEventListener('change', loadTransactions);
 document.getElementById('fType').addEventListener('change', loadTransactions);
 
-loadSummary();
+loadSummary().then(loadSettlement);
 loadTransactions();
 </script>
 </body>
