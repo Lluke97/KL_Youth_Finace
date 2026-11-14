@@ -13,6 +13,7 @@
 <link rel="icon" href="/icons/icon-192.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <header class="top">
@@ -55,11 +56,7 @@
 
   <section class="block">
     <h2>월별 수입/지출</h2>
-    <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin:-6px 0 10px;">
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--income);margin-right:5px;"></span>수입</span>
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--expense);margin-right:5px;"></span>지출</span>
-    </div>
-    <div class="bars" id="monthlyChart"></div>
+    <div style="height:220px;"><canvas id="monthlyChart"></canvas></div>
   </section>
 
   <section class="block">
@@ -194,25 +191,49 @@ async function loadSummary() {
     banner.textContent = `카페에서 가져온 지출 중 ${s.needsReviewCount}건이 "카페운영/청년부지출" 분류가 필요합니다. 관리자 페이지에서 확인해주세요.`;
   }
 
-  // Monthly stacked bars
-  const chart = document.getElementById('monthlyChart');
-  chart.innerHTML = '';
-  const maxVal = Math.max(1, ...s.monthly.map((m) => Math.max(m.income, m.expense)));
-  s.monthly.slice(-8).forEach((m) => {
-    const incH = Math.round((m.income / maxVal) * 100);
-    const expH = Math.round((m.expense / maxVal) * 100);
-    chart.innerHTML += `
-      <div class="bar-group">
-        <div class="stack">
-          <div class="seg income" style="height:${incH}px"></div>
-        </div>
-        <div class="stack">
-          <div class="seg expense" style="height:${expH}px"></div>
-        </div>
-        <div class="month-label">${m.month.slice(5)}월</div>
-      </div>`;
+  lastMonthly = s.monthly.slice(-8);
+  renderMonthlyChart(lastMonthly);
+}
+
+let monthlyChartInstance = null;
+function renderMonthlyChart(monthly) {
+  const style = getComputedStyle(document.documentElement);
+  const incomeColor = style.getPropertyValue('--income').trim();
+  const expenseColor = style.getPropertyValue('--expense').trim();
+  const textColor = style.getPropertyValue('--muted').trim();
+  const gridColor = style.getPropertyValue('--border').trim();
+
+  const ctx = document.getElementById('monthlyChart').getContext('2d');
+  if (monthlyChartInstance) monthlyChartInstance.destroy();
+  monthlyChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: monthly.map((m) => m.month.slice(5) + '월'),
+      datasets: [
+        { label: '수입', data: monthly.map((m) => m.income), backgroundColor: incomeColor, borderRadius: 4 },
+        { label: '지출', data: monthly.map((m) => m.expense), backgroundColor: expenseColor, borderRadius: 4 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { beginAtZero: true, ticks: { color: textColor, callback: (v) => fmt(v) }, grid: { color: gridColor } },
+        x: { ticks: { color: textColor }, grid: { display: false } }
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12 } },
+        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${fmt(item.raw)}` } }
+      }
+    }
   });
 }
+
+// Theme toggle doesn't reload the page, so re-render with the new colors.
+document.getElementById('themeBtn').addEventListener('click', () => {
+  setTimeout(() => { if (lastMonthly) renderMonthlyChart(lastMonthly); }, 0);
+});
+let lastMonthly = null;
 
 let lastBalance = 0;
 
