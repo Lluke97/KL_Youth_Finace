@@ -615,6 +615,21 @@ app.post('/api/admin/settlements', (req, res) => {
   res.status(201).json(entry);
 });
 
+app.put('/api/admin/settlements/:id', (req, res) => {
+  const list = db.getSettlements();
+  const idx = list.findIndex((s) => s.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'not found' });
+  const { date, cash, tng, bank, memo } = req.body || {};
+  if (date !== undefined) list[idx].date = date;
+  if (cash !== undefined) list[idx].cash = parseFloat(cash);
+  if (tng !== undefined) list[idx].tng = parseFloat(tng);
+  if (bank !== undefined) list[idx].bank = bank === '' || bank === null ? null : parseFloat(bank);
+  if (memo !== undefined) list[idx].memo = memo;
+  list[idx].total = list[idx].cash + list[idx].tng + (list[idx].bank || 0);
+  db.saveSettlements(list);
+  res.json(list[idx]);
+});
+
 app.delete('/api/admin/settlements/:id', (req, res) => {
   const list = db.getSettlements().filter((s) => s.id !== req.params.id);
   db.saveSettlements(list);

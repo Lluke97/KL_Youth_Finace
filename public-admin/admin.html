@@ -530,24 +530,76 @@ async function removeSettlement(id) {
   loadSettlements();
 }
 
-async function loadSettlements() {
-  const res = await fetch('/api/settlements');
-  const list = await res.json();
-  const body = document.querySelector('#settleTable tbody');
-  body.innerHTML = '';
-  list.forEach((s) => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
+let settlementsCache = [];
+
+function settlementRowHtml(s) {
+  return `<tr data-id="${s.id}">
       <td>${s.date}</td>
       <td>${SOURCE_LABEL[s.source] || s.source}</td>
       <td class="amount">${fmt(s.cash)}</td>
       <td class="amount">${fmt(s.tng)}</td>
       <td class="amount">${s.bank == null ? '—' : fmt(s.bank)}</td>
       <td class="amount">${fmt(s.total)}</td>
-      <td><button class="danger" data-id="${s.id}">삭제</button></td>`;
-    tr.querySelector('button.danger').addEventListener('click', () => removeSettlement(s.id));
-    body.appendChild(tr);
+      <td class="row-actions">${miniActionsHtml(s.id)}</td></tr>`;
+}
+function settlementEditRowHtml(s) {
+  return `<tr data-id="${s.id}">
+      <td><input type="date" class="edit-input" data-sf="date" value="${s.date}"></td>
+      <td>${SOURCE_LABEL[s.source] || s.source}</td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-sf="cash" value="${s.cash}"></td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-sf="tng" value="${s.tng}"></td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-sf="bank" value="${s.bank == null ? '' : s.bank}"></td>
+      <td class="amount">—</td>
+      <td class="row-actions">${miniSaveCancelHtml(s.id)}</td></tr>`;
+}
+
+function bindSettlementRowEvents(body) {
+  body.querySelectorAll('[data-redit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-redit');
+      const s = settlementsCache.find((x) => x.id === id);
+      const tr = body.querySelector(`tr[data-id="${id}"]`);
+      tr.outerHTML = settlementEditRowHtml(s);
+      bindSettlementRowEvents(body);
+    });
   });
+  body.querySelectorAll('[data-rdel]').forEach((btn) => {
+    btn.addEventListener('click', () => removeSettlement(btn.getAttribute('data-rdel')));
+  });
+  body.querySelectorAll('[data-rcancel]').forEach((btn) => {
+    btn.addEventListener('click', () => loadSettlements());
+  });
+  body.querySelectorAll('[data-rsave]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-rsave');
+      const tr = body.querySelector(`tr[data-id="${id}"]`);
+      const payload = {};
+      tr.querySelectorAll('[data-sf]').forEach((input) => {
+        payload[input.getAttribute('data-sf')] = input.value;
+      });
+      const res = await fetch('/api/admin/settlements/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        toast('정산 기록이 수정되었습니다');
+        loadSettlements();
+      } else {
+        const data = await res.json();
+        toast('오류: ' + data.error);
+      }
+    });
+  });
+}
+
+async function loadSettlements() {
+  const res = await fetch('/api/settlements');
+  const list = await res.json();
+  settlementsCache = list;
+  const body = document.querySelector('#settleTable tbody');
+  body.innerHTML = list.map(settlementRowHtml).join('');
+  bindSettlementRowEvents(body);
 }
 
 const TAG_OPTIONS = ['', 'cafe-ops', 'youth-general', 'needs-review'];
