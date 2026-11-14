@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>청년부 예산 대시보드</title>
+<title>청년부 예산</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#4f46e5">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,289 +13,48 @@
 <link rel="icon" href="/icons/icon-192.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  .home-wrap { max-width: 420px; margin: 40px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 14px; }
+  .home-link {
+    display: flex; align-items: center; gap: 14px; padding: 20px; border-radius: 16px;
+    background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+    text-decoration: none; color: var(--text);
+  }
+  .home-link .emoji { font-size: 28px; }
+  .home-link .label { font-size: 16px; font-weight: 700; }
+  .home-link .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+</style>
 </head>
 <body>
 <header class="top">
   <div class="title">
-    <h1>청년부 예산 대시보드</h1>
-    <p>카페 수입/지출 + 회비 + 기타 내역을 한눈에</p>
+    <h1>청년부 예산</h1>
   </div>
   <div class="header-right">
     <button id="themeBtn" title="테마 변경">🌓</button>
-    <div class="nav-wrap">
-      <button class="nav-btn" id="navBtn">☰</button>
-      <div class="nav-menu" id="navMenu" hidden>
-        <a href="/" class="current">🏠 대시보드</a>
-        <a href="/admin#sync">🔄 카페 동기화</a>
-        <a href="/admin#purchase">🧾 구매 지출 입력</a>
-        <a href="/admin#income">💸 수입 입력</a>
-        <a href="/admin#settlement">💰 정산 입력</a>
-        <a href="/admin#manual">✏️ 직접 입력</a>
-        <a href="/admin#bulk">📥 일괄 업로드</a>
-        <a href="/admin#all">📋 전체 내역</a>
-      </div>
-    </div>
   </div>
 </header>
-<main>
-  <div class="warn-banner" id="reviewBanner"></div>
-
-  <div class="balance-card">
-    <div class="label">현재 잔액 (장부 기준)</div>
-    <div class="value" id="balanceValue">—</div>
-  </div>
-
-  <section class="block" id="settlementBlock" style="display:none;">
-    <h2>실제 잔액 구성 (최근 정산)</h2>
-    <div id="settlementNote" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></div>
-    <div class="cards" id="settlementCards"></div>
-    <div id="settlementDiffNote" style="font-size:12px;margin-top:10px;"></div>
-  </section>
-
-  <div class="cards" id="sourceCards"></div>
-
-  <section class="block">
-    <h2>월별 수입/지출</h2>
-    <div style="height:220px;"><canvas id="monthlyChart"></canvas></div>
-  </section>
-
-  <section class="block">
-    <h2>카테고리별 보기</h2>
-    <div class="cat-toggle" id="catToggle">
-      <div class="chip selected" data-mode="expense">지출</div>
-      <div class="chip" data-mode="income">수입</div>
-    </div>
-    <div class="cat-bars" id="catBars"></div>
-  </section>
-
-  <section class="block">
-    <h2>구분별 요약 (카페운영 / 청년부 일반지출 / 확인필요)</h2>
-    <table id="tagTable">
-      <thead><tr><th>구분</th><th class="amount">수입</th><th class="amount">지출</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <section class="block">
-    <h2>최근 내역</h2>
-    <div class="filters">
-      <select id="fSource">
-        <option value="">전체 소스</option>
-        <option value="cafe">카페</option>
-        <option value="membership">회비</option>
-        <option value="manual">수동입력</option>
-        <option value="carryover">이월금</option>
-      </select>
-      <select id="fType">
-        <option value="">전체</option>
-        <option value="income">수입</option>
-        <option value="expense">지출</option>
-      </select>
-      <select id="fCategory">
-        <option value="">전체 카테고리</option>
-      </select>
-    </div>
-    <table id="txTable">
-      <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-</main>
-<script>
-document.getElementById('navBtn').addEventListener('click', function (e) {
-  e.stopPropagation();
-  document.getElementById('navMenu').hidden = !document.getElementById('navMenu').hidden;
-});
-document.addEventListener('click', function () {
-  document.getElementById('navMenu').hidden = true;
-});
-
-const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleString();
-
-const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금' };
-const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
-
-// Distinct, non-income/expense color palette — one hue per category so the
-// breakdown stays readable even with many small categories mixed in.
-const CAT_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#06b6d4', '#ef4444', '#84cc16', '#f472b6', '#0ea5e9', '#a855f7', '#22c55e'];
-let catMode = 'expense';
-let byCategoryCache = {};
-
-function renderCategoryBars() {
-  const el = document.getElementById('catBars');
-  const entries = Object.entries(byCategoryCache)
-    .map(([cat, v]) => [cat, v[catMode] || 0])
-    .filter(([, amt]) => amt > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 12);
-  if (!entries.length) { el.innerHTML = '<p style="font-size:12px;color:var(--muted);">표시할 내역이 없습니다.</p>'; return; }
-  const max = Math.max(...entries.map(([, amt]) => amt));
-  el.innerHTML = entries.map(([cat, amt], i) => {
-    const color = CAT_PALETTE[i % CAT_PALETTE.length];
-    const pct = Math.max(2, Math.round((amt / max) * 100));
-    return `
-      <div class="cat-row">
-        <span class="cat-dot" style="background:${color}"></span>
-        <span class="cat-name" title="${cat}">${cat}</span>
-        <span class="cat-track"><span class="cat-fill" style="width:${pct}%;background:${color}"></span></span>
-        <span class="cat-amount">${fmt(amt)}</span>
-      </div>`;
-  }).join('');
-}
-
-document.querySelectorAll('#catToggle .chip').forEach((chip) => {
-  chip.addEventListener('click', () => {
-    document.querySelectorAll('#catToggle .chip').forEach((c) => c.classList.remove('selected'));
-    chip.classList.add('selected');
-    catMode = chip.dataset.mode;
-    renderCategoryBars();
-  });
-});
-
-async function loadSummary() {
-  const res = await fetch('/api/summary');
-  const s = await res.json();
-
-  document.getElementById('balanceValue').textContent = fmt(s.balance);
-  lastBalance = s.balance;
-
-  const cardsEl = document.getElementById('sourceCards');
-  cardsEl.innerHTML = '';
-  Object.entries(s.bySource).forEach(([src, v]) => {
-    cardsEl.innerHTML += `
-      <div class="card">
-        <div class="label">${SOURCE_LABEL[src] || src}</div>
-        <div class="value income">+${fmt(v.income)}</div>
-        <div class="value expense">-${fmt(v.expense)}</div>
-      </div>`;
-  });
-
-  const tagBody = document.querySelector('#tagTable tbody');
-  tagBody.innerHTML = '';
-  Object.entries(s.byTag).forEach(([tag, v]) => {
-    tagBody.innerHTML += `<tr><td>${TAG_LABEL[tag] || tag}</td><td class="amount income">${fmt(v.income)}</td><td class="amount expense">${fmt(v.expense)}</td></tr>`;
-  });
-
-  byCategoryCache = s.byCategory || {};
-  renderCategoryBars();
-
-  const catSelect = document.getElementById('fCategory');
-  const prevVal = catSelect.value;
-  const cats = Object.keys(byCategoryCache).sort((a, b) => a.localeCompare(b, 'ko'));
-  catSelect.innerHTML = '<option value="">전체 카테고리</option>' + cats.map((c) => `<option value="${c}">${c}</option>`).join('');
-  catSelect.value = cats.includes(prevVal) ? prevVal : '';
-
-  const banner = document.getElementById('reviewBanner');
-  if (s.needsReviewCount > 0) {
-    banner.style.display = 'block';
-    banner.textContent = `카페에서 가져온 지출 중 ${s.needsReviewCount}건이 "카페운영/청년부지출" 분류가 필요합니다. 관리자 페이지에서 확인해주세요.`;
-  }
-
-  lastMonthly = s.monthly.slice(-8);
-  renderMonthlyChart(lastMonthly);
-}
-
-let monthlyChartInstance = null;
-function renderMonthlyChart(monthly) {
-  const style = getComputedStyle(document.documentElement);
-  const incomeColor = style.getPropertyValue('--income').trim();
-  const expenseColor = style.getPropertyValue('--expense').trim();
-  const textColor = style.getPropertyValue('--muted').trim();
-  const gridColor = style.getPropertyValue('--border').trim();
-
-  const ctx = document.getElementById('monthlyChart').getContext('2d');
-  if (monthlyChartInstance) monthlyChartInstance.destroy();
-  monthlyChartInstance = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: monthly.map((m) => m.month.slice(5) + '월'),
-      datasets: [
-        { label: '수입', data: monthly.map((m) => m.income), backgroundColor: incomeColor, borderRadius: 4 },
-        { label: '지출', data: monthly.map((m) => m.expense), backgroundColor: expenseColor, borderRadius: 4 }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { beginAtZero: true, ticks: { color: textColor, callback: (v) => fmt(v) }, grid: { color: gridColor } },
-        x: { ticks: { color: textColor }, grid: { display: false } }
-      },
-      plugins: {
-        legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12 } },
-        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${fmt(item.raw)}` } }
-      }
-    }
-  });
-}
-
-// Theme toggle doesn't reload the page, so re-render with the new colors.
-document.getElementById('themeBtn').addEventListener('click', () => {
-  setTimeout(() => { if (lastMonthly) renderMonthlyChart(lastMonthly); }, 0);
-});
-let lastMonthly = null;
-
-let lastBalance = 0;
-
-async function loadSettlement() {
-  const res = await fetch('/api/settlements');
-  const list = await res.json();
-  const block = document.getElementById('settlementBlock');
-  if (!list.length) { block.style.display = 'none'; return; }
-  block.style.display = 'block';
-  const s = list[0];
-  const SOURCE_NOTE = { 'cafe-pos': '카페 정산에서 자동 반영', manual: '직접 입력' };
-  document.getElementById('settlementNote').textContent = `${s.date} 기준 (${SOURCE_NOTE[s.source] || s.source})`;
-
-  const cardsEl = document.getElementById('settlementCards');
-  cardsEl.innerHTML = `
-    <div class="card"><div class="label">💵 현금</div><div class="value">${fmt(s.cash)}</div></div>
-    <div class="card"><div class="label">📱 터치앤고</div><div class="value">${fmt(s.tng)}</div></div>
-    <div class="card"><div class="label">🏦 은행</div><div class="value">${s.bank == null ? '—' : fmt(s.bank)}</div></div>
-    <div class="card"><div class="label">합계</div><div class="value">${fmt(s.total)}</div></div>`;
-
-  const diff = s.total - lastBalance;
-  const diffNote = document.getElementById('settlementDiffNote');
-  if (Math.abs(diff) < 1) {
-    diffNote.textContent = '✓ 장부 잔액과 실제 정산 금액이 일치합니다.';
-    diffNote.style.color = 'var(--income)';
-  } else {
-    diffNote.textContent = `⚠ 장부 잔액과 ${fmt(Math.abs(diff))} 차이가 있습니다 (${diff > 0 ? '실제가 더 많음' : '실제가 더 적음'}).`;
-    diffNote.style.color = 'var(--expense)';
-  }
-}
-
-async function loadTransactions() {
-  const source = document.getElementById('fSource').value;
-  const type = document.getElementById('fType').value;
-  const category = document.getElementById('fCategory').value;
-  const params = new URLSearchParams();
-  if (source) params.set('source', source);
-  if (type) params.set('type', type);
-  if (category) params.set('category', category);
-  const res = await fetch('/api/transactions?' + params.toString());
-  const txns = await res.json();
-  const body = document.querySelector('#txTable tbody');
-  body.innerHTML = '';
-  txns.slice(0, 50).forEach((t) => {
-    body.innerHTML += `
-      <tr>
-        <td>${t.date}</td>
-        <td><span class="pill ${t.source}">${SOURCE_LABEL[t.source] || t.source}</span></td>
-        <td>${t.category}</td>
-        <td>${t.item || ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">🧾</a>` : ''}</td>
-        <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
-      </tr>`;
-  });
-}
-
-document.getElementById('fSource').addEventListener('change', loadTransactions);
-document.getElementById('fType').addEventListener('change', loadTransactions);
-document.getElementById('fCategory').addEventListener('change', loadTransactions);
-
-loadSummary().then(loadSettlement);
-loadTransactions();
-</script>
+<div class="home-wrap">
+  <a class="home-link" href="/dashboard.html">
+    <span class="emoji">📊</span>
+    <span><span class="label">대시보드</span><br><span class="desc">잔액, 월별 수입/지출, 카테고리별 보기</span></span>
+  </a>
+  <a class="home-link" href="/admin#purchase">
+    <span class="emoji">🧾</span>
+    <span><span class="label">구매 지출 입력</span><br><span class="desc">간식·비품 등 쓴 돈 기록</span></span>
+  </a>
+  <a class="home-link" href="/admin#income">
+    <span class="emoji">💸</span>
+    <span><span class="label">수입 입력</span><br><span class="desc">회비 · 후원금 · 헌금</span></span>
+  </a>
+  <a class="home-link" href="/admin#settlement">
+    <span class="emoji">💰</span>
+    <span><span class="label">정산 입력</span><br><span class="desc">현금 · 터치앤고 · 은행 실제 잔액</span></span>
+  </a>
+  <a class="home-link" href="/admin">
+    <span class="emoji">🛠️</span>
+    <span><span class="label">관리자</span><br><span class="desc">카페 동기화, 일괄 업로드, 전체 내역</span></span>
+  </a>
+</div>
 </body>
 </html>
