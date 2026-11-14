@@ -5,18 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>청년부 예산 - 관리자</title>
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 <style>
   form.entry { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   form.entry label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
-  form.entry input, form.entry select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+  form.entry input, form.entry select {
+    width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+    background: var(--card); color: var(--text);
+  }
   form.entry .full { grid-column: 1 / -1; }
   button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600; }
   button.primary { background: var(--accent); color: white; }
-  button.ghost { background: #f3f4f6; color: var(--text); }
+  button.ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
   button.danger { background: #fee2e2; color: #b91c1c; }
   .row-actions { display: flex; gap: 6px; }
-  select.tag-select { font-size: 11px; padding: 3px 6px; }
+  select.tag-select { font-size: 11px; padding: 3px 6px; background: var(--card); color: var(--text); border: 1px solid var(--border); }
   .toast { position: fixed; bottom: 20px; right: 20px; background: #111827; color: white; padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; }
+  .admin-tabs { display: flex; gap: 6px; max-width: 960px; margin: 0 auto 4px; padding: 0 24px; flex-wrap: wrap; }
+  .admin-tabs .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--muted); text-decoration: none; }
+  .admin-tabs .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 </style>
 </head>
 <body>
@@ -26,21 +33,29 @@
     <p><a class="admin-link" href="/">← 대시보드로</a></p>
   </div>
   <div class="header-right">
+    <button id="themeBtn" title="테마 변경">🌓</button>
     <div class="nav-wrap">
       <button class="nav-btn" id="navBtn">☰</button>
       <div class="nav-menu" id="navMenu" hidden>
         <a href="/">🏠 대시보드</a>
+        <a href="/admin#sync">🔄 카페 동기화</a>
         <a href="/admin#purchase">🧾 구매 지출 입력</a>
         <a href="/admin#settlement">💰 정산 입력</a>
         <a href="/admin#manual">✏️ 직접 입력</a>
         <a href="/admin#all">📋 전체 내역</a>
-        <a href="/admin" class="current">🛠️ 관리자</a>
       </div>
     </div>
   </div>
 </header>
+<nav class="admin-tabs" id="adminTabs">
+  <a class="tab" data-section="sync" href="#sync">🔄 동기화</a>
+  <a class="tab" data-section="settlement" href="#settlement">💰 정산</a>
+  <a class="tab" data-section="purchase" href="#purchase">🧾 구매 지출</a>
+  <a class="tab" data-section="manual" href="#manual">✏️ 직접 입력</a>
+  <a class="tab" data-section="all" href="#all">📋 전체 내역</a>
+</nav>
 <main>
-  <section class="block" id="sync">
+  <section class="block admin-section" id="sync">
     <h2>카페 데이터 동기화 / 백업</h2>
     <div class="row-actions">
       <button class="primary" onclick="syncCafe()">카페(jusumcafe)에서 새 내역 가져오기</button>
@@ -49,7 +64,7 @@
     <p id="syncResult" style="font-size:13px;color:var(--muted);margin-top:8px;"></p>
   </section>
 
-  <section class="block" id="settlement">
+  <section class="block admin-section" id="settlement">
     <h2>실제 잔액 정산 입력 (현금 / 터치앤고 / 은행)</h2>
     <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페 관리자 페이지에서 정산 후 "정산 전송" 버튼을 누르면 자동으로 들어오지만, 지금처럼 직접 넣고 싶을 때 여기서 입력하세요.</p>
     <form class="entry" id="settlementForm">
@@ -84,7 +99,7 @@
     </table>
   </section>
 
-  <section class="block" id="purchase">
+  <section class="block admin-section" id="purchase">
     <h2>구매 지출 입력</h2>
     <p style="font-size:12px;color:var(--muted);margin-top:-4px;">간식·비품 등 청년부에서 쓴 돈을 기록하세요. 영수증 사진은 선택사항입니다.</p>
     <form class="entry" id="purchaseForm" enctype="multipart/form-data">
@@ -126,7 +141,7 @@
     </form>
   </section>
 
-  <section class="block" id="manual">
+  <section class="block admin-section" id="manual">
     <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
     <form class="entry" id="entryForm">
       <div>
@@ -169,7 +184,7 @@
     </form>
   </section>
 
-  <section class="block" id="all">
+  <section class="block admin-section" id="all">
     <h2>전체 내역 (분류 수정 / 삭제)</h2>
     <div class="filters">
       <select id="fTag">
@@ -194,6 +209,27 @@ document.getElementById('navBtn').addEventListener('click', function (e) {
 document.addEventListener('click', function () {
   document.getElementById('navMenu').hidden = true;
 });
+
+// ---- show one menu section at a time (driven by the #hash, same sections
+// the hamburger menu links to) ----
+const SECTION_IDS = ['sync', 'settlement', 'purchase', 'manual', 'all'];
+function showSection(id) {
+  if (!SECTION_IDS.includes(id)) id = SECTION_IDS[0];
+  SECTION_IDS.forEach((s) => {
+    document.getElementById(s).classList.toggle('hidden-section', s !== id);
+  });
+  document.querySelectorAll('#adminTabs .tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.section === id);
+  });
+  document.querySelectorAll('#navMenu a[href^="/admin#"]').forEach((a) => {
+    a.classList.toggle('current', a.getAttribute('href') === '/admin#' + id);
+  });
+}
+function currentSectionFromHash() {
+  return (location.hash || '').replace('#', '') || SECTION_IDS[0];
+}
+showSection(currentSectionFromHash());
+window.addEventListener('hashchange', () => showSection(currentSectionFromHash()));
 
 const fmt = (n) => 'RM' + Math.round(n).toLocaleString();
 

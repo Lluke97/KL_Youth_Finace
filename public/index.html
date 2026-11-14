@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>청년부 예산 대시보드</title>
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 </head>
 <body>
 <header class="top">
@@ -13,15 +14,16 @@
     <p>카페 수입/지출 + 회비 + 기타 내역을 한눈에</p>
   </div>
   <div class="header-right">
+    <button id="themeBtn" title="테마 변경">🌓</button>
     <div class="nav-wrap">
       <button class="nav-btn" id="navBtn">☰</button>
       <div class="nav-menu" id="navMenu" hidden>
         <a href="/" class="current">🏠 대시보드</a>
+        <a href="/admin#sync">🔄 카페 동기화</a>
         <a href="/admin#purchase">🧾 구매 지출 입력</a>
         <a href="/admin#settlement">💰 정산 입력</a>
         <a href="/admin#manual">✏️ 직접 입력</a>
         <a href="/admin#all">📋 전체 내역</a>
-        <a href="/admin">🛠️ 관리자</a>
       </div>
     </div>
   </div>
@@ -45,7 +47,20 @@
 
   <section class="block">
     <h2>월별 수입/지출</h2>
+    <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin:-6px 0 10px;">
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--income);margin-right:5px;"></span>수입</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--expense);margin-right:5px;"></span>지출</span>
+    </div>
     <div class="bars" id="monthlyChart"></div>
+  </section>
+
+  <section class="block">
+    <h2>카테고리별 보기</h2>
+    <div class="cat-toggle" id="catToggle">
+      <div class="chip selected" data-mode="expense">지출</div>
+      <div class="chip" data-mode="income">수입</div>
+    </div>
+    <div class="cat-bars" id="catBars"></div>
   </section>
 
   <section class="block">
@@ -71,6 +86,9 @@
         <option value="income">수입</option>
         <option value="expense">지출</option>
       </select>
+      <select id="fCategory">
+        <option value="">전체 카테고리</option>
+      </select>
     </div>
     <table id="txTable">
       <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>항목</th><th class="amount">금액</th></tr></thead>
@@ -91,6 +109,43 @@ const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleS
 
 const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금' };
 const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
+
+// Distinct, non-income/expense color palette — one hue per category so the
+// breakdown stays readable even with many small categories mixed in.
+const CAT_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#06b6d4', '#ef4444', '#84cc16', '#f472b6', '#0ea5e9', '#a855f7', '#22c55e'];
+let catMode = 'expense';
+let byCategoryCache = {};
+
+function renderCategoryBars() {
+  const el = document.getElementById('catBars');
+  const entries = Object.entries(byCategoryCache)
+    .map(([cat, v]) => [cat, v[catMode] || 0])
+    .filter(([, amt]) => amt > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12);
+  if (!entries.length) { el.innerHTML = '<p style="font-size:12px;color:var(--muted);">표시할 내역이 없습니다.</p>'; return; }
+  const max = Math.max(...entries.map(([, amt]) => amt));
+  el.innerHTML = entries.map(([cat, amt], i) => {
+    const color = CAT_PALETTE[i % CAT_PALETTE.length];
+    const pct = Math.max(2, Math.round((amt / max) * 100));
+    return `
+      <div class="cat-row">
+        <span class="cat-dot" style="background:${color}"></span>
+        <span class="cat-name" title="${cat}">${cat}</span>
+        <span class="cat-track"><span class="cat-fill" style="width:${pct}%;background:${color}"></span></span>
+        <span class="cat-amount">${fmt(amt)}</span>
+      </div>`;
+  }).join('');
+}
+
+document.querySelectorAll('#catToggle .chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#catToggle .chip').forEach((c) => c.classList.remove('selected'));
+    chip.classList.add('selected');
+    catMode = chip.dataset.mode;
+    renderCategoryBars();
+  });
+});
 
 async function loadSummary() {
   const res = await fetch('/api/summary');
@@ -115,6 +170,15 @@ async function loadSummary() {
   Object.entries(s.byTag).forEach(([tag, v]) => {
     tagBody.innerHTML += `<tr><td>${TAG_LABEL[tag] || tag}</td><td class="amount income">${fmt(v.income)}</td><td class="amount expense">${fmt(v.expense)}</td></tr>`;
   });
+
+  byCategoryCache = s.byCategory || {};
+  renderCategoryBars();
+
+  const catSelect = document.getElementById('fCategory');
+  const prevVal = catSelect.value;
+  const cats = Object.keys(byCategoryCache).sort((a, b) => a.localeCompare(b, 'ko'));
+  catSelect.innerHTML = '<option value="">전체 카테고리</option>' + cats.map((c) => `<option value="${c}">${c}</option>`).join('');
+  catSelect.value = cats.includes(prevVal) ? prevVal : '';
 
   const banner = document.getElementById('reviewBanner');
   if (s.needsReviewCount > 0) {
@@ -175,9 +239,11 @@ async function loadSettlement() {
 async function loadTransactions() {
   const source = document.getElementById('fSource').value;
   const type = document.getElementById('fType').value;
+  const category = document.getElementById('fCategory').value;
   const params = new URLSearchParams();
   if (source) params.set('source', source);
   if (type) params.set('type', type);
+  if (category) params.set('category', category);
   const res = await fetch('/api/transactions?' + params.toString());
   const txns = await res.json();
   const body = document.querySelector('#txTable tbody');
@@ -196,6 +262,7 @@ async function loadTransactions() {
 
 document.getElementById('fSource').addEventListener('change', loadTransactions);
 document.getElementById('fType').addEventListener('change', loadTransactions);
+document.getElementById('fCategory').addEventListener('change', loadTransactions);
 
 loadSummary().then(loadSettlement);
 loadTransactions();

@@ -143,12 +143,13 @@ app.get('/api/purchase-categories', (req, res) => {
 
 app.get('/api/transactions', (req, res) => {
   let txns = db.getTransactions();
-  const { from, to, source, type, tag } = req.query;
+  const { from, to, source, type, tag, category } = req.query;
   if (from) txns = txns.filter((t) => t.date >= from);
   if (to) txns = txns.filter((t) => t.date <= to);
   if (source) txns = txns.filter((t) => t.source === source);
   if (type) txns = txns.filter((t) => t.type === type);
   if (tag) txns = txns.filter((t) => t.tag === tag);
+  if (category) txns = txns.filter((t) => t.category === category);
   txns.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   res.json(txns);
 });
@@ -158,6 +159,7 @@ app.get('/api/summary', (req, res) => {
   let balance = 0;
   const bySource = {}; // source -> { income, expense }
   const byTag = {}; // tag -> { income, expense }  (cafe-ops / youth-general / needs-review)
+  const byCategory = {}; // category -> { income, expense }
   const monthly = {}; // YYYY-MM -> { income, expense }
 
   txns.forEach((t) => {
@@ -171,6 +173,10 @@ app.get('/api/summary', (req, res) => {
     if (!byTag[tagKey]) byTag[tagKey] = { income: 0, expense: 0 };
     byTag[tagKey][t.type] += t.amount;
 
+    const catKey = t.category || '기타';
+    if (!byCategory[catKey]) byCategory[catKey] = { income: 0, expense: 0 };
+    byCategory[catKey][t.type] += t.amount;
+
     const month = t.date.slice(0, 7);
     if (!monthly[month]) monthly[month] = { month, income: 0, expense: 0 };
     monthly[month][t.type] += t.amount;
@@ -179,7 +185,7 @@ app.get('/api/summary', (req, res) => {
   const monthlyList = Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month));
   const needsReviewCount = txns.filter((t) => t.tag === 'needs-review').length;
 
-  res.json({ balance, bySource, byTag, monthly: monthlyList, needsReviewCount, transactionCount: txns.length });
+  res.json({ balance, bySource, byTag, byCategory, monthly: monthlyList, needsReviewCount, transactionCount: txns.length });
 });
 
 // Settlements (실제 현금/터치앤고/은행 잔액) — read-only, same access as the

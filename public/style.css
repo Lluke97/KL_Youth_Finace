@@ -4,12 +4,28 @@
   --text: #1f2430;
   --muted: #6b7280;
   --border: #e5e7eb;
-  --income: #16a34a;
-  --expense: #dc2626;
-  --accent: #2563eb;
+  --income: #0d9488;
+  --expense: #f59e0b;
+  --accent: #4f46e5;
   --warn-bg: #fff7ed;
   --warn-border: #fdba74;
   --warn-text: #9a3412;
+  --shadow: 0 2px 8px rgba(31,36,48,.08);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161c; --card: #1d2029; --text: #eceef3; --muted: #8e94a6; --border: #2c303c;
+    --income: #2dd4bf; --expense: #fbbf24; --accent: #818cf8;
+    --warn-bg: #3a2a12; --warn-border: #92651b; --warn-text: #fbbf24;
+    --shadow: 0 2px 10px rgba(0,0,0,.4); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161c; --card: #1d2029; --text: #eceef3; --muted: #8e94a6; --border: #2c303c;
+  --income: #2dd4bf; --expense: #fbbf24; --accent: #818cf8;
+  --warn-bg: #3a2a12; --warn-border: #92651b; --warn-text: #fbbf24;
+  --shadow: 0 2px 10px rgba(0,0,0,.4); color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -34,6 +50,10 @@ header.top .title p { margin: 0; color: var(--muted); font-size: 13px; }
 
 /* ---- hamburger nav menu (jump between pages/sections) ---- */
 .header-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+#themeBtn {
+  background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 15px; line-height: 1;
+  cursor: pointer; padding: 6px 9px; border-radius: 8px; -webkit-tap-highlight-color: transparent;
+}
 .nav-wrap { position: relative; }
 .nav-btn {
   background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 18px; line-height: 1;
@@ -129,5 +149,24 @@ a.admin-link:hover { text-decoration: underline; }
 
 .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .filters select, .filters input {
-  font-size: 12px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: white;
+  font-size: 12px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--text);
 }
+
+/* ---- category breakdown (horizontal bars, one distinct color per category) ---- */
+.cat-toggle { display: flex; gap: 6px; margin-bottom: 12px; }
+.cat-toggle .chip {
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card);
+  font-size: 12px; font-weight: 600; cursor: pointer; color: var(--muted);
+}
+.cat-toggle .chip.selected { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cat-bars { display: flex; flex-direction: column; gap: 10px; }
+.cat-row { display: flex; align-items: center; gap: 10px; }
+.cat-row .cat-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.cat-row .cat-name { flex: 0 0 120px; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cat-row .cat-track { flex: 1; background: var(--bg); border-radius: 6px; height: 14px; overflow: hidden; }
+.cat-row .cat-fill { height: 100%; border-radius: 6px; }
+.cat-row .cat-amount { flex: 0 0 72px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* ---- admin page: show one menu section at a time ---- */
+.admin-section.hidden-section { display: none; }
