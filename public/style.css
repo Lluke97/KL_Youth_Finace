@@ -21,12 +21,35 @@ body {
 }
 
 header.top {
-  padding: 20px 24px 8px;
+  padding: 16px 24px;
   max-width: 960px;
   margin: 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
-header.top h1 { font-size: 20px; margin: 0 0 4px; }
-header.top p { margin: 0; color: var(--muted); font-size: 13px; }
+header.top .title h1 { font-size: 20px; margin: 0 0 4px; }
+header.top .title p { margin: 0; color: var(--muted); font-size: 13px; }
+
+/* ---- hamburger nav menu (jump between pages/sections) ---- */
+.header-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.nav-wrap { position: relative; }
+.nav-btn {
+  background: var(--card); border: 1px solid var(--border); color: var(--text); font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 6px 10px; border-radius: 8px; -webkit-tap-highlight-color: transparent;
+}
+.nav-menu {
+  position: absolute; top: 40px; right: 0; background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.08); overflow: hidden; min-width: 190px; z-index: 30;
+}
+.nav-menu a {
+  display: block; padding: 11px 14px; color: var(--text); text-decoration: none;
+  font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border);
+}
+.nav-menu a:last-child { border-bottom: none; }
+.nav-menu a:hover, .nav-menu a:active { background: var(--bg); }
+.nav-menu a.current { color: var(--accent); }
 
 main {
   max-width: 960px;

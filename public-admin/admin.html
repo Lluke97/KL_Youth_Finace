@@ -21,11 +21,26 @@
 </head>
 <body>
 <header class="top">
-  <h1>청년부 예산 - 관리자</h1>
-  <p><a class="admin-link" href="/">← 대시보드로</a></p>
+  <div class="title">
+    <h1>청년부 예산 - 관리자</h1>
+    <p><a class="admin-link" href="/">← 대시보드로</a></p>
+  </div>
+  <div class="header-right">
+    <div class="nav-wrap">
+      <button class="nav-btn" id="navBtn">☰</button>
+      <div class="nav-menu" id="navMenu" hidden>
+        <a href="/">🏠 대시보드</a>
+        <a href="/admin#purchase">🧾 구매 지출 입력</a>
+        <a href="/admin#settlement">💰 정산 입력</a>
+        <a href="/admin#manual">✏️ 직접 입력</a>
+        <a href="/admin#all">📋 전체 내역</a>
+        <a href="/admin" class="current">🛠️ 관리자</a>
+      </div>
+    </div>
+  </div>
 </header>
 <main>
-  <section class="block">
+  <section class="block" id="sync">
     <h2>카페 데이터 동기화 / 백업</h2>
     <div class="row-actions">
       <button class="primary" onclick="syncCafe()">카페(jusumcafe)에서 새 내역 가져오기</button>
@@ -34,9 +49,9 @@
     <p id="syncResult" style="font-size:13px;color:var(--muted);margin-top:8px;"></p>
   </section>
 
-  <section class="block">
+  <section class="block" id="settlement">
     <h2>실제 잔액 정산 입력 (현금 / 터치앤고 / 은행)</h2>
-    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페 정산 버튼을 누르면 자동으로도 들어오지만, 지금처럼 직접 넣고 싶을 때 여기서 입력하세요.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페 관리자 페이지에서 정산 후 "정산 전송" 버튼을 누르면 자동으로 들어오지만, 지금처럼 직접 넣고 싶을 때 여기서 입력하세요.</p>
     <form class="entry" id="settlementForm">
       <div>
         <label>날짜</label>
@@ -69,7 +84,7 @@
     </table>
   </section>
 
-  <section class="block">
+  <section class="block" id="purchase">
     <h2>구매 지출 입력</h2>
     <p style="font-size:12px;color:var(--muted);margin-top:-4px;">간식·비품 등 청년부에서 쓴 돈을 기록하세요. 영수증 사진은 선택사항입니다.</p>
     <form class="entry" id="purchaseForm" enctype="multipart/form-data">
@@ -111,7 +126,7 @@
     </form>
   </section>
 
-  <section class="block">
+  <section class="block" id="manual">
     <h2>직접 입력 (회비 / 기타 수입·지출)</h2>
     <form class="entry" id="entryForm">
       <div>
@@ -154,7 +169,7 @@
     </form>
   </section>
 
-  <section class="block">
+  <section class="block" id="all">
     <h2>전체 내역 (분류 수정 / 삭제)</h2>
     <div class="filters">
       <select id="fTag">
@@ -172,6 +187,14 @@
 </main>
 <div class="toast" id="toast"></div>
 <script>
+document.getElementById('navBtn').addEventListener('click', function (e) {
+  e.stopPropagation();
+  document.getElementById('navMenu').hidden = !document.getElementById('navMenu').hidden;
+});
+document.addEventListener('click', function () {
+  document.getElementById('navMenu').hidden = true;
+});
+
 const fmt = (n) => 'RM' + Math.round(n).toLocaleString();
 
 function toast(msg) {

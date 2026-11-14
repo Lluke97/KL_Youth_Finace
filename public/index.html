@@ -8,8 +8,23 @@
 </head>
 <body>
 <header class="top">
-  <h1>청년부 예산 대시보드</h1>
-  <p>카페 수입/지출 + 회비 + 기타 내역을 한눈에 · <a class="admin-link" href="/admin">관리자 입력 →</a></p>
+  <div class="title">
+    <h1>청년부 예산 대시보드</h1>
+    <p>카페 수입/지출 + 회비 + 기타 내역을 한눈에</p>
+  </div>
+  <div class="header-right">
+    <div class="nav-wrap">
+      <button class="nav-btn" id="navBtn">☰</button>
+      <div class="nav-menu" id="navMenu" hidden>
+        <a href="/" class="current">🏠 대시보드</a>
+        <a href="/admin#purchase">🧾 구매 지출 입력</a>
+        <a href="/admin#settlement">💰 정산 입력</a>
+        <a href="/admin#manual">✏️ 직접 입력</a>
+        <a href="/admin#all">📋 전체 내역</a>
+        <a href="/admin">🛠️ 관리자</a>
+      </div>
+    </div>
+  </div>
 </header>
 <main>
   <div class="warn-banner" id="reviewBanner"></div>
@@ -64,6 +79,14 @@
   </section>
 </main>
 <script>
+document.getElementById('navBtn').addEventListener('click', function (e) {
+  e.stopPropagation();
+  document.getElementById('navMenu').hidden = !document.getElementById('navMenu').hidden;
+});
+document.addEventListener('click', function () {
+  document.getElementById('navMenu').hidden = true;
+});
+
 const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleString();
 
 const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금' };
