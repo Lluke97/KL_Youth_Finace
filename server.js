@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
+const XLSX = require('xlsx');
 const db = require('./db');
 const { syncCafe } = require('./lib/cafeSync');
 const sheetsSync = require('./lib/sheetsSync');
@@ -28,6 +29,67 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
+
+// Bulk upload (엑셀/CSV): kept in memory, never written to disk — it's
+// parsed once and discarded, unlike receipt photos above.
+const uploadBulk = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+const BULK_TEMPLATE_HEADER = ['날짜', '구분', '카테고리', '항목', '금액', '메모', '작성자'];
+
+// Accepts an Excel serial date number, a Date, or a string like
+// "2026-11-14" / "2026/11/14" and normalizes to YYYY-MM-DD. Same approach
+// as scripts/import-excel.js, duplicated here since that's a standalone
+// CLI script, not a module other code can require from.
+function parseFlexibleDate(raw) {
+  let d;
+  if (typeof raw === 'number') {
+    const parsed = XLSX.SSF.parse_date_code(raw);
+    d = new Date(parsed.y, parsed.m - 1, parsed.d);
+  } else if (raw instanceof Date) {
+    d = raw;
+  } else {
+    d = new Date(String(raw).trim().replace(/\./g, '-').replace(/\//g, '-'));
+  }
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// A small hand-rolled CSV parser instead of handing .csv files to the XLSX
+// library's sheet reader: XLSX auto-sniffs date-looking strings in CSV into
+// Excel serial numbers, and that conversion picks up a timezone-dependent
+// fractional offset (e.g. "2026-11-01" -> 46327.333...) that then parses
+// back to the wrong calendar day. Plain-text CSV parsing keeps every cell
+// exactly as typed, which parseFlexibleDate's string branch handles correctly.
+function parseCsvRows(text) {
+  const lines = text.split(/\r\n|\n|\r/).filter((l) => l.length > 0);
+  if (!lines.length) return [];
+  function parseLine(line) {
+    const out = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+        } else cur += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ',') { out.push(cur); cur = ''; } else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+  const header = parseLine(lines[0]).map((h) => h.trim());
+  return lines.slice(1).map((line) => {
+    const cells = parseLine(line);
+    const obj = {};
+    header.forEach((h, idx) => { obj[h] = cells[idx] !== undefined ? cells[idx].trim() : ''; });
+    return obj;
+  });
+}
 
 const app = express();
 app.use(express.json());
@@ -148,6 +210,19 @@ app.get('/api/purchase-categories', (req, res) => {
 
 app.get('/api/income-categories', (req, res) => {
   res.json(INCOME_CATEGORIES);
+});
+
+// A ready-to-fill CSV so bulk upload isn't a guessing game about column
+// names/order. Opens straight into Excel/Numbers/Google Sheets.
+app.get('/api/admin/bulk-template.csv', maybeRequireAdmin, (req, res) => {
+  const sample = [
+    BULK_TEMPLATE_HEADER.join(','),
+    ['2026-11-14', '수입', '회비', '11월 회비 - 홍길동', '30', '', 'Luke'].join(','),
+    ['2026-11-14', '지출', '행사비', '수련회 간식', '120.50', '다이소', 'Luke'].join(',')
+  ].join('\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="youth-budget-template.csv"');
+  res.send('﻿' + sample); // BOM so Excel opens Korean text as UTF-8, not mojibake
 });
 
 app.get('/api/transactions', (req, res) => {
@@ -322,6 +397,76 @@ app.post('/api/admin/income', (req, res) => {
   txns.push(entry);
   db.saveTransactions(txns);
   res.status(201).json(entry);
+});
+
+// Bulk upload: .xlsx or .csv with columns 날짜/구분/카테고리/항목/금액/메모/작성자
+// (see /api/admin/bulk-template.csv). Every row is validated independently —
+// bad rows are reported but never silently dropped, and nothing is saved
+// unless at least one row is valid, so a half-garbled file doesn't leave a
+// partial, confusing mess in the ledger.
+app.post('/api/admin/bulk-upload', uploadBulk.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '파일이 없습니다 (file 필드로 .xlsx 또는 .csv 업로드)' });
+
+  const isCsv = /\.csv$/i.test(req.file.originalname || '') || req.file.mimetype === 'text/csv';
+  let rows;
+  try {
+    if (isCsv) {
+      const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+      rows = parseCsvRows(text);
+    } else {
+      const wb = XLSX.read(req.file.buffer, { type: 'buffer', codepage: 65001, cellDates: false });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    }
+  } catch (e) {
+    return res.status(400).json({ error: '파일을 읽을 수 없습니다: ' + e.message });
+  }
+  if (!rows.length) return res.status(400).json({ error: '비어 있는 파일입니다' });
+
+  const TYPE_MAP = { '수입': 'income', '지출': 'expense', income: 'income', expense: 'expense' };
+  const valid = [];
+  const errors = [];
+
+  rows.forEach((row, i) => {
+    const rowNum = i + 2; // +1 for header row, +1 for 1-based display
+    const rawDate = row['날짜'] ?? row['date'];
+    const rawType = String(row['구분'] ?? row['type'] ?? '').trim();
+    const category = String(row['카테고리'] ?? row['category'] ?? '').trim();
+    const rawAmount = row['금액'] ?? row['amount'];
+    const item = String(row['항목'] ?? row['item'] ?? '').trim();
+    const memo = String(row['메모'] ?? row['memo'] ?? '').trim();
+    const author = String(row['작성자'] ?? row['author'] ?? '').trim();
+
+    const date = parseFlexibleDate(rawDate);
+    const type = TYPE_MAP[rawType];
+    const amount = parseFloat(rawAmount);
+
+    if (!date) return errors.push({ row: rowNum, error: `날짜를 읽을 수 없음: "${rawDate}"` });
+    if (!type) return errors.push({ row: rowNum, error: `구분은 "수입" 또는 "지출"이어야 함: "${rawType}"` });
+    if (!category) return errors.push({ row: rowNum, error: '카테고리가 비어 있음' });
+    if (Number.isNaN(amount) || amount <= 0) return errors.push({ row: rowNum, error: `금액이 올바르지 않음: "${rawAmount}"` });
+
+    valid.push({
+      id: 'tx_' + uid(),
+      date,
+      type,
+      source: category === '회비' ? 'membership' : 'manual',
+      tag: 'youth-general',
+      category,
+      item: item || category,
+      amount,
+      memo,
+      author,
+      externalId: null,
+      createdAt: new Date().toISOString()
+    });
+  });
+
+  if (valid.length) {
+    const txns = db.getTransactions();
+    db.saveTransactions(txns.concat(valid));
+  }
+  res.json({ inserted: valid.length, errorCount: errors.length, errors: errors.slice(0, 50) });
 });
 
 app.put('/api/admin/transactions/:id', (req, res) => {

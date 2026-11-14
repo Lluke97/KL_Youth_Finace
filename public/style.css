@@ -157,8 +157,8 @@ a.admin-link:hover { text-decoration: underline; }
 .cat-row { display: flex; align-items: center; gap: 10px; }
 .cat-row .cat-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 .cat-row .cat-name { flex: 0 0 120px; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cat-row .cat-track { flex: 1; background: var(--bg); border-radius: 6px; height: 14px; overflow: hidden; }
-.cat-row .cat-fill { height: 100%; border-radius: 6px; }
+.cat-row .cat-track { flex: 1; display: block; background: var(--bg); border-radius: 6px; height: 14px; overflow: hidden; }
+.cat-row .cat-fill { display: block; height: 100%; border-radius: 6px; }
 .cat-row .cat-amount { flex: 0 0 72px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
 
 /* ---- admin page: show one menu section at a time ---- */

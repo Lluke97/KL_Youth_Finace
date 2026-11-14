@@ -50,6 +50,7 @@
         <a href="/admin#income">💸 수입 입력</a>
         <a href="/admin#settlement">💰 정산 입력</a>
         <a href="/admin#manual">✏️ 직접 입력</a>
+        <a href="/admin#bulk">📥 일괄 업로드</a>
         <a href="/admin#all">📋 전체 내역</a>
       </div>
     </div>
@@ -61,6 +62,7 @@
   <a class="tab" data-section="purchase" href="#purchase">🧾 구매 지출</a>
   <a class="tab" data-section="income" href="#income">💸 수입</a>
   <a class="tab" data-section="manual" href="#manual">✏️ 직접 입력</a>
+  <a class="tab" data-section="bulk" href="#bulk">📥 일괄 업로드</a>
   <a class="tab" data-section="all" href="#all">📋 전체 내역</a>
 </nav>
 <main>
@@ -227,6 +229,19 @@
     </form>
   </section>
 
+  <section class="block admin-section" id="bulk">
+    <h2>일괄 업로드 (엑셀 / CSV)</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">
+      한 번에 여러 건 올릴 때 사용하세요. 양식 다운받아서 채운 뒤 업로드하면 돼요.
+      <a href="/api/admin/bulk-template.csv" style="color:var(--accent);">📄 양식 다운로드</a>
+    </p>
+    <form id="bulkForm" enctype="multipart/form-data" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input type="file" name="file" id="bulkFile" accept=".csv,.xlsx,.xls" required>
+      <button class="primary" type="submit">업로드</button>
+    </form>
+    <div id="bulkResult" style="margin-top:14px;"></div>
+  </section>
+
   <section class="block admin-section" id="all">
     <h2>전체 내역 (분류 수정 / 삭제)</h2>
     <div class="filters">
@@ -255,7 +270,7 @@ document.addEventListener('click', function () {
 
 // ---- show one menu section at a time (driven by the #hash, same sections
 // the hamburger menu links to) ----
-const SECTION_IDS = ['sync', 'settlement', 'purchase', 'income', 'manual', 'all'];
+const SECTION_IDS = ['sync', 'settlement', 'purchase', 'income', 'manual', 'bulk', 'all'];
 function showSection(id) {
   if (!SECTION_IDS.includes(id)) id = SECTION_IDS[0];
   SECTION_IDS.forEach((s) => {
@@ -350,6 +365,30 @@ document.getElementById('incomeForm').addEventListener('submit', async (e) => {
     const data = await res.json();
     toast('오류: ' + data.error);
   }
+});
+
+document.getElementById('bulkForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const resultEl = document.getElementById('bulkResult');
+  const fd = new FormData(e.target);
+  if (!document.getElementById('bulkFile').files.length) return;
+  resultEl.innerHTML = '<p style="font-size:12px;color:var(--muted);">업로드 중...</p>';
+  const res = await fetch('/api/admin/bulk-upload', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (!res.ok) {
+    resultEl.innerHTML = `<p style="font-size:13px;color:var(--expense);">오류: ${data.error}</p>`;
+    return;
+  }
+  let html = `<p style="font-size:13px;color:var(--income);font-weight:700;">✓ ${data.inserted}건 추가됨</p>`;
+  if (data.errorCount > 0) {
+    html += `<p style="font-size:12px;color:var(--expense);margin-top:6px;">${data.errorCount}건은 건너뜀:</p>` +
+      '<ul style="font-size:12px;color:var(--muted);margin:4px 0 0;padding-left:18px;">' +
+      data.errors.map((e) => `<li>${e.row}행: ${e.error}</li>`).join('') +
+      '</ul>';
+  }
+  resultEl.innerHTML = html;
+  e.target.reset();
+  loadAll();
 });
 
 document.getElementById('entryForm').addEventListener('submit', async (e) => {
