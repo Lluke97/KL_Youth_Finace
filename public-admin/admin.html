@@ -30,6 +30,13 @@
   .edit-input { width: 100%; padding: 4px 6px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); box-sizing: border-box; }
   .edit-input.amount-input { width: 90px; }
   .btn-small { padding: 5px 9px; font-size: 11px; }
+  .recent-wrap { margin-top: 16px; }
+  .recent-wrap h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+  .mini-table-wrap { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .mini-table-wrap table { width: 100%; font-size: 12px; }
+  .mini-table-wrap th, .mini-table-wrap td { padding: 6px 8px; }
+  .mini-table-wrap thead th { position: sticky; top: 0; background: var(--card); }
+  .mini-empty { font-size: 12px; color: var(--muted); padding: 10px; }
   .toast { position: fixed; bottom: 20px; right: 20px; background: #111827; color: white; padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; }
   .admin-tabs { display: flex; gap: 6px; max-width: 960px; margin: 0 auto 4px; padding: 0 24px; flex-wrap: wrap; }
   .admin-tabs .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--muted); text-decoration: none; }
@@ -155,6 +162,15 @@
         <button class="primary" type="submit">구매 지출 추가</button>
       </div>
     </form>
+    <div class="recent-wrap">
+      <h3>최근 구매 지출 (최근 10건 · 바로 수정/삭제 가능)</h3>
+      <div class="mini-table-wrap">
+        <table id="purchaseRecentTable">
+          <thead><tr><th>날짜</th><th>카테고리</th><th>품목</th><th class="amount">금액</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section class="block admin-section" id="income">
@@ -189,6 +205,15 @@
         <button class="primary" type="submit">수입 추가</button>
       </div>
     </form>
+    <div class="recent-wrap">
+      <h3>최근 수입 (최근 10건 · 바로 수정/삭제 가능)</h3>
+      <div class="mini-table-wrap">
+        <table id="incomeRecentTable">
+          <thead><tr><th>날짜</th><th>카테고리</th><th>낸 사람</th><th class="amount">금액</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section class="block admin-section" id="manual">
@@ -232,6 +257,15 @@
         <button class="primary" type="submit">추가</button>
       </div>
     </form>
+    <div class="recent-wrap">
+      <h3>최근 직접 입력 (최근 10건 · 바로 수정/삭제 가능)</h3>
+      <div class="mini-table-wrap">
+        <table id="manualRecentTable">
+          <thead><tr><th>날짜</th><th>구분</th><th>카테고리</th><th>항목</th><th class="amount">금액</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section class="block admin-section" id="bulk">
@@ -296,6 +330,18 @@ window.addEventListener('hashchange', () => showSection(currentSectionFromHash()
 
 const fmt = (n) => 'RM' + Math.round(n).toLocaleString();
 
+function todayLocalStr() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function setDefaultDates() {
+  document.querySelectorAll('form.entry input[type="date"]').forEach((el) => {
+    if (!el.value) el.value = todayLocalStr();
+  });
+}
+setDefaultDates();
+
 function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -322,13 +368,15 @@ async function exportSheet() {
   else toast('오류: ' + data.error);
 }
 
+let purchaseCategoriesList = [];
+let incomeCategoriesList = [];
+
 async function loadPurchaseCategories() {
   const res = await fetch('/api/purchase-categories');
-  const categories = await res.json();
+  purchaseCategoriesList = await res.json();
   const select = document.getElementById('purchaseCategory');
-  select.innerHTML = categories.map((c) => `<option value="${c}">${c}</option>`).join('');
+  select.innerHTML = purchaseCategoriesList.map((c) => `<option value="${c}">${c}</option>`).join('');
 }
-loadPurchaseCategories();
 
 document.getElementById('purchaseForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -336,6 +384,7 @@ document.getElementById('purchaseForm').addEventListener('submit', async (e) => 
   const res = await fetch('/api/admin/purchases', { method: 'POST', body: fd });
   if (res.ok) {
     e.target.reset();
+    setDefaultDates();
     toast('구매 지출이 추가되었습니다');
     loadAll();
   } else {
@@ -346,11 +395,10 @@ document.getElementById('purchaseForm').addEventListener('submit', async (e) => 
 
 async function loadIncomeCategories() {
   const res = await fetch('/api/income-categories');
-  const categories = await res.json();
+  incomeCategoriesList = await res.json();
   const select = document.getElementById('incomeCategory');
-  select.innerHTML = categories.map((c) => `<option value="${c}">${c}</option>`).join('');
+  select.innerHTML = incomeCategoriesList.map((c) => `<option value="${c}">${c}</option>`).join('');
 }
-loadIncomeCategories();
 
 document.getElementById('incomeForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -364,6 +412,7 @@ document.getElementById('incomeForm').addEventListener('submit', async (e) => {
   });
   if (res.ok) {
     e.target.reset();
+    setDefaultDates();
     toast('수입이 추가되었습니다');
     loadAll();
   } else {
@@ -408,6 +457,7 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
   });
   if (res.ok) {
     e.target.reset();
+    setDefaultDates();
     toast('추가되었습니다');
     loadAll();
   } else {
@@ -432,6 +482,7 @@ document.getElementById('settlementForm').addEventListener('submit', async (e) =
   });
   if (res.ok) {
     e.target.reset();
+    setDefaultDates();
     toast('정산 기록이 추가되었습니다');
     loadSettlements();
   } else {
@@ -535,9 +586,11 @@ function txEditRowHtml(t) {
 }
 
 function renderTxTable() {
+  const tag = document.getElementById('fTag').value;
+  const rows = tag ? txCache.filter((t) => (t.tag || '') === tag) : txCache;
   const body = document.querySelector('#allTable tbody');
-  body.innerHTML = txCache.map(txRowHtml).join('');
-  txCache.forEach((t) => {
+  body.innerHTML = rows.map(txRowHtml).join('');
+  rows.forEach((t) => {
     const row = body.querySelector(`tr[data-id="${t.id}"]`);
     if (!row) return;
     row.querySelector('.tag-cell').appendChild(buildTagSelect(t));
@@ -584,17 +637,160 @@ function bindTxRowEvents() {
   });
 }
 
-async function loadAll() {
-  const tag = document.getElementById('fTag').value;
-  const params = new URLSearchParams();
-  if (tag) params.set('tag', tag);
-  const res = await fetch('/api/transactions?' + params.toString());
-  txCache = await res.json();
-  renderTxTable();
+// ---- compact "recently added" lists under 구매 지출 / 수입 / 직접 입력 ----
+// Reuses the same PUT/DELETE endpoints as the 전체 내역 table above, just
+// with a smaller column set per entry type, limited to the 10 most recent
+// rows so these stay quick to scan instead of turning into another full
+// 전체 내역 table.
+const MINI_LIMIT = 10;
+
+function miniActionsHtml(id) {
+  return `<button class="ghost btn-small" data-redit="${id}">수정</button><button class="danger btn-small" data-rdel="${id}">삭제</button>`;
+}
+function miniSaveCancelHtml(id) {
+  return `<button class="primary btn-small" data-rsave="${id}">저장</button><button class="ghost btn-small" data-rcancel="${id}">취소</button>`;
+}
+const esc = (s) => (s || '').replace(/"/g, '&quot;');
+
+function purchaseRowHtml(t) {
+  return `<tr data-id="${t.id}">
+      <td>${t.date}</td>
+      <td>${t.category}</td>
+      <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}</td>
+      <td class="amount expense">-${fmt(t.amount)}</td>
+      <td class="row-actions">${miniActionsHtml(t.id)}</td></tr>`;
+}
+function purchaseEditRowHtml(t) {
+  const opts = purchaseCategoriesList.map((c) => `<option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('');
+  return `<tr data-id="${t.id}">
+      <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
+      <td><select class="edit-input" data-f="category">${opts}</select></td>
+      <td><input type="text" class="edit-input" data-f="item" value="${esc(t.item)}"></td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-f="amount" value="${t.amount}"></td>
+      <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
 }
 
-document.getElementById('fTag').addEventListener('change', loadAll);
-loadAll();
+function incomeRowHtml(t) {
+  return `<tr data-id="${t.id}">
+      <td>${t.date}</td>
+      <td>${t.category}</td>
+      <td>${t.payer || ''}</td>
+      <td class="amount income">+${fmt(t.amount)}</td>
+      <td class="row-actions">${miniActionsHtml(t.id)}</td></tr>`;
+}
+function incomeEditRowHtml(t) {
+  const opts = incomeCategoriesList.map((c) => `<option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('');
+  return `<tr data-id="${t.id}">
+      <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
+      <td><select class="edit-input" data-f="category">${opts}</select></td>
+      <td><input type="text" class="edit-input" data-f="payer" value="${esc(t.payer)}"></td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-f="amount" value="${t.amount}"></td>
+      <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
+}
+
+function manualRowHtml(t) {
+  return `<tr data-id="${t.id}">
+      <td>${t.date}</td>
+      <td>${t.type === 'income' ? '수입' : '지출'}</td>
+      <td>${t.category}</td>
+      <td>${t.item || ''}</td>
+      <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
+      <td class="row-actions">${miniActionsHtml(t.id)}</td></tr>`;
+}
+function manualEditRowHtml(t) {
+  return `<tr data-id="${t.id}">
+      <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
+      <td>
+        <select class="edit-input" data-f="type">
+          <option value="income" ${t.type === 'income' ? 'selected' : ''}>수입</option>
+          <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>지출</option>
+        </select>
+      </td>
+      <td><input type="text" class="edit-input" data-f="category" value="${esc(t.category)}"></td>
+      <td><input type="text" class="edit-input" data-f="item" value="${esc(t.item)}"></td>
+      <td><input type="number" step="0.01" class="edit-input amount-input" data-f="amount" value="${t.amount}"></td>
+      <td class="row-actions">${miniSaveCancelHtml(t.id)}</td></tr>`;
+}
+
+const MINI_TABLES = {
+  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 5 },
+  incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 5 },
+  manualRecentTable: { row: manualRowHtml, edit: manualEditRowHtml, cols: 6 }
+};
+
+function bindMiniTableEvents(tableId) {
+  const cfg = MINI_TABLES[tableId];
+  const body = document.querySelector(`#${tableId} tbody`);
+  body.querySelectorAll('button[data-redit]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.getAttribute('data-redit');
+      const t = txCache.find((x) => x.id === id);
+      body.querySelector(`tr[data-id="${id}"]`).outerHTML = cfg.edit(t);
+      bindMiniTableEvents(tableId);
+    });
+  });
+  body.querySelectorAll('button[data-rcancel]').forEach((b) => {
+    b.addEventListener('click', renderRecentLists);
+  });
+  body.querySelectorAll('button[data-rsave]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const id = b.getAttribute('data-rsave');
+      const row = body.querySelector(`tr[data-id="${id}"]`);
+      const patch = {};
+      row.querySelectorAll('[data-f]').forEach((el) => { patch[el.dataset.f] = el.value; });
+      if (patch.amount !== undefined) patch.amount = parseFloat(patch.amount);
+      if (Number.isNaN(patch.amount) || !patch.date) return alert('날짜/금액을 확인해주세요');
+      await fetch('/api/admin/transactions/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      toast('수정되었습니다');
+      loadAll();
+    });
+  });
+  body.querySelectorAll('button[data-rdel]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('삭제할까요?')) return;
+      await fetch('/api/admin/transactions/' + b.getAttribute('data-rdel'), { method: 'DELETE' });
+      loadAll();
+    });
+  });
+}
+
+function renderRecentLists() {
+  const byCreatedDesc = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '');
+  const purchaseRows = txCache
+    .filter((t) => t.type === 'expense' && purchaseCategoriesList.includes(t.category))
+    .sort(byCreatedDesc).slice(0, MINI_LIMIT);
+  const incomeRows = txCache
+    .filter((t) => t.type === 'income' && incomeCategoriesList.includes(t.category))
+    .sort(byCreatedDesc).slice(0, MINI_LIMIT);
+  const shownIds = new Set([...purchaseRows, ...incomeRows].map((t) => t.id));
+  const manualRows = txCache
+    .filter((t) => (t.source === 'manual' || t.source === 'membership') && !shownIds.has(t.id))
+    .sort(byCreatedDesc).slice(0, MINI_LIMIT);
+
+  const sets = { purchaseRecentTable: purchaseRows, incomeRecentTable: incomeRows, manualRecentTable: manualRows };
+  Object.entries(sets).forEach(([tableId, rows]) => {
+    const cfg = MINI_TABLES[tableId];
+    const body = document.querySelector(`#${tableId} tbody`);
+    body.innerHTML = rows.length
+      ? rows.map(cfg.row).join('')
+      : `<tr><td colspan="${cfg.cols}" class="mini-empty">아직 입력된 내역이 없습니다</td></tr>`;
+    bindMiniTableEvents(tableId);
+  });
+}
+
+async function loadAll() {
+  const res = await fetch('/api/transactions');
+  txCache = await res.json();
+  renderTxTable();
+  renderRecentLists();
+}
+
+document.getElementById('fTag').addEventListener('change', renderTxTable);
+Promise.all([loadPurchaseCategories(), loadIncomeCategories()]).then(loadAll);
 loadSettlements();
 </script>
 </body>
