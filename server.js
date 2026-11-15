@@ -469,11 +469,17 @@ app.post('/api/webhook/cafe-settlement', (req, res) => {
   if (req.headers['x-webhook-secret'] !== secret) {
     return res.status(401).json({ error: 'invalid webhook secret' });
   }
-  const { date, cash, tng, bank, memo } = req.body || {};
-  if (typeof cash !== 'number' || typeof tng !== 'number') {
-    return res.status(400).json({ error: 'cash and tng must be numbers' });
+  // 현금/은행은 카페가 보고한 절대 금액을 그대로 새 기준으로 삼지만, 터치앤고는
+  // 다르다 — 카페의 터치앤고 지갑 잔액을 그대로 가져오면 안 되고, 카페 정산에서
+  // "이번에 얼마나 늘었는지"(증가액)만 파이낸스의 현재 터치앤고 잔액에 더해야
+  // 한다. 카페 지갑과 파이낸스가 보는 터치앤고는 같은 숫자가 아니기 때문.
+  const { date, cash, tngIncrease, bank, memo } = req.body || {};
+  if (typeof cash !== 'number' || typeof tngIncrease !== 'number') {
+    return res.status(400).json({ error: 'cash and tngIncrease must be numbers' });
   }
   const bankVal = typeof bank === 'number' ? bank : null;
+  const currentTng = computeBalanceBreakdown().current.tng;
+  const tng = currentTng + tngIncrease;
   const entry = {
     id: 'settle_' + uid(),
     date: date || todayStr(),
@@ -482,7 +488,7 @@ app.post('/api/webhook/cafe-settlement', (req, res) => {
     bank: bankVal,
     total: cash + tng + (bankVal || 0),
     source: 'cafe-pos',
-    memo: memo || '카페 정산 자동 반영',
+    memo: memo || `카페 정산 자동 반영 (터치앤고 +${tngIncrease})`,
     createdAt: new Date().toISOString()
   };
   const list = db.getSettlements();
