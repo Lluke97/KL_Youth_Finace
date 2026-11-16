@@ -393,6 +393,52 @@ app.get('/api/balance-breakdown', (req, res) => {
   res.json(computeBalanceBreakdown());
 });
 
+// Shared by the manual "카페에서 새 내역 가져오기" button (POST /api/admin/sync-cafe)
+// and the settlement webhook below — pulling new orders/expenses from
+// cafe-pos and recording them as transactions. Factored out so pressing
+// "정산 전송" on the cafe side can trigger both the balance update AND this
+// transaction sync in one go, instead of requiring a separate manual click.
+async function performCafeSync() {
+  const baseUrl = process.env.CAFE_BASE_URL || 'https://jusumcafe.up.railway.app';
+  const user = process.env.CAFE_ADMIN_USER;
+  const pass = process.env.CAFE_ADMIN_PASS;
+  if (!user || !pass) {
+    throw new Error('CAFE_ADMIN_USER / CAFE_ADMIN_PASS 환경변수가 설정되어 있지 않습니다 (cafe-pos의 ADMIN_USER/ADMIN_PASS와 동일한 값).');
+  }
+  const settings = db.getSettings();
+  const { newTxns, lastOrderAt, lastExpenseCreatedAt } = await syncCafe({ baseUrl, user, pass, since: settings.cafeSync });
+
+  const txns = db.getTransactions();
+  const existingIds = new Set(txns.map((t) => t.externalId).filter(Boolean));
+  const toAdd = newTxns.filter((t) => !existingIds.has(t.externalId));
+  toAdd.forEach((t) => txns.push(t));
+  db.saveTransactions(txns);
+
+  settings.cafeSync = { lastOrderAt, lastExpenseCreatedAt };
+  db.saveSettings(settings);
+
+  // One settlement row for the whole sync, not one per order, so the
+  // 정산 history doesn't get flooded by a busy day at the cafe.
+  if (toAdd.some((t) => t.channel)) {
+    const b = computeBalanceBreakdown();
+    const list = db.getSettlements();
+    list.push({
+      id: 'settle_' + uid(),
+      date: todayStr(),
+      cash: b.current.cash,
+      tng: b.current.tng,
+      bank: b.current.bank,
+      total: b.current.total,
+      source: 'auto',
+      memo: `자동 반영: 카페 동기화 (${toAdd.length}건)`,
+      createdAt: new Date().toISOString()
+    });
+    db.saveSettlements(list);
+  }
+
+  return { added: toAdd.length, needsReview: toAdd.filter((t) => t.tag === 'needs-review').length };
+}
+
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
 // names/order. Opens straight into Excel/Numbers/Google Sheets.
 app.get('/api/admin/bulk-template.csv', maybeRequireAdmin, (req, res) => {
@@ -463,7 +509,7 @@ app.get('/api/settlements', (req, res) => {
 // Cafe-pos pushes a completed settlement here automatically. This is NOT
 // behind the admin login — cafe-pos is a different server calling in, not a
 // browser — it's behind its own shared-secret header instead.
-app.post('/api/webhook/cafe-settlement', (req, res) => {
+app.post('/api/webhook/cafe-settlement', async (req, res) => {
   const secret = process.env.SETTLEMENT_WEBHOOK_SECRET;
   if (!secret) return res.status(503).json({ error: 'SETTLEMENT_WEBHOOK_SECRET not configured on this server' });
   if (req.headers['x-webhook-secret'] !== secret) {
@@ -478,8 +524,29 @@ app.post('/api/webhook/cafe-settlement', (req, res) => {
     return res.status(400).json({ error: 'cash and tngIncrease must be numbers' });
   }
   const bankVal = typeof bank === 'number' ? bank : null;
+  // Snapshot tng BEFORE the sync below touches the ledger. tngIncrease (from
+  // cafe-pos) already accounts for every order since cafe-pos's last
+  // settlement, including the ones about to be synced in — so this has to
+  // be the pre-sync figure, or the orders we're about to pull in would get
+  // counted twice (once via tngIncrease, once via their own channel delta).
   const currentTng = computeBalanceBreakdown().current.tng;
   const tng = currentTng + tngIncrease;
+
+  // "정산 전송" 버튼 한 번으로 잔액뿐 아니라 그동안 쌓인 주문/지출 내역도
+  // 같이 가져오도록, 새 정산 기준점을 기록하기 전에 먼저 카페 동기화를
+  // 돌린다. 동기화된 거래들의 createdAt이 아래에서 저장할 정산 기준점의
+  // createdAt보다 앞서게 되므로, 그 기준점 이후의 증감만 다시 더하는
+  // computeBalanceBreakdown 로직에서 중복으로 잡히지 않는다 — 방금 센
+  // 실제 현금/증가분(cash/tngIncrease)에 이미 반영돼 있는 거래이기 때문.
+  // 동기화가 실패해도(환경변수 누락, 네트워크 오류 등) 정산 자체는
+  // 실패시키지 않는다 — 정산이 더 중요하므로.
+  let cafeSync = null;
+  try {
+    cafeSync = await performCafeSync();
+  } catch (e) {
+    console.error('[youth-budget] cafe-settlement 웹훅 이전 카페 동기화 실패:', e.message);
+  }
+
   const entry = {
     id: 'settle_' + uid(),
     date: date || todayStr(),
@@ -494,7 +561,8 @@ app.post('/api/webhook/cafe-settlement', (req, res) => {
   const list = db.getSettlements();
   list.push(entry);
   db.saveSettlements(list);
-  res.status(201).json(entry);
+
+  res.status(201).json(cafeSync ? Object.assign({}, entry, { cafeSync }) : entry);
 });
 
 // ---------------- Admin-only API ----------------
@@ -743,45 +811,9 @@ app.delete('/api/admin/settlements/:id', (req, res) => {
 });
 
 app.post('/api/admin/sync-cafe', async (req, res) => {
-  const baseUrl = process.env.CAFE_BASE_URL || 'https://jusumcafe.up.railway.app';
-  const user = process.env.CAFE_ADMIN_USER;
-  const pass = process.env.CAFE_ADMIN_PASS;
-  if (!user || !pass) {
-    return res.status(400).json({ error: 'CAFE_ADMIN_USER / CAFE_ADMIN_PASS 환경변수가 설정되어 있지 않습니다 (cafe-pos의 ADMIN_USER/ADMIN_PASS와 동일한 값).' });
-  }
   try {
-    const settings = db.getSettings();
-    const { newTxns, lastOrderAt, lastExpenseCreatedAt } = await syncCafe({ baseUrl, user, pass, since: settings.cafeSync });
-
-    const txns = db.getTransactions();
-    const existingIds = new Set(txns.map((t) => t.externalId).filter(Boolean));
-    const toAdd = newTxns.filter((t) => !existingIds.has(t.externalId));
-    toAdd.forEach((t) => txns.push(t));
-    db.saveTransactions(txns);
-
-    settings.cafeSync = { lastOrderAt, lastExpenseCreatedAt };
-    db.saveSettings(settings);
-
-    // One settlement row for the whole sync, not one per order, so the
-    // 정산 history doesn't get flooded by a busy day at the cafe.
-    if (toAdd.some((t) => t.channel)) {
-      const b = computeBalanceBreakdown();
-      const list = db.getSettlements();
-      list.push({
-        id: 'settle_' + uid(),
-        date: todayStr(),
-        cash: b.current.cash,
-        tng: b.current.tng,
-        bank: b.current.bank,
-        total: b.current.total,
-        source: 'auto',
-        memo: `자동 반영: 카페 동기화 (${toAdd.length}건)`,
-        createdAt: new Date().toISOString()
-      });
-      db.saveSettlements(list);
-    }
-
-    res.json({ added: toAdd.length, needsReview: toAdd.filter((t) => t.tag === 'needs-review').length });
+    const result = await performCafeSync();
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
