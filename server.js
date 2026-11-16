@@ -398,7 +398,14 @@ app.get('/api/balance-breakdown', (req, res) => {
 // cafe-pos and recording them as transactions. Factored out so pressing
 // "정산 전송" on the cafe side can trigger both the balance update AND this
 // transaction sync in one go, instead of requiring a separate manual click.
-async function performCafeSync() {
+// skipAutoSettlement: the settlement webhook calls this right before it
+// saves the REAL "cafe-pos" settlement row a moment later — an "auto"
+// breadcrumb row here would just be an almost-identical row sitting next
+// to the real one in 정산 history a few milliseconds apart, which reads as
+// a duplicate rather than useful information. The standalone manual
+// "새 내역 가져오기" button (the other caller) has no such real settlement
+// following it, so it keeps the breadcrumb (default false = keep it).
+async function performCafeSync({ skipAutoSettlement = false } = {}) {
   const baseUrl = process.env.CAFE_BASE_URL || 'https://jusumcafe.up.railway.app';
   const user = process.env.CAFE_ADMIN_USER;
   const pass = process.env.CAFE_ADMIN_PASS;
@@ -419,7 +426,7 @@ async function performCafeSync() {
 
   // One settlement row for the whole sync, not one per order, so the
   // 정산 history doesn't get flooded by a busy day at the cafe.
-  if (toAdd.some((t) => t.channel)) {
+  if (!skipAutoSettlement && toAdd.some((t) => t.channel)) {
     const b = computeBalanceBreakdown();
     const list = db.getSettlements();
     list.push({
@@ -542,7 +549,7 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
   // 실패시키지 않는다 — 정산이 더 중요하므로.
   let cafeSync = null;
   try {
-    cafeSync = await performCafeSync();
+    cafeSync = await performCafeSync({ skipAutoSettlement: true });
   } catch (e) {
     console.error('[youth-budget] cafe-settlement 웹훅 이전 카페 동기화 실패:', e.message);
   }
