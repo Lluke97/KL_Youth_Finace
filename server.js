@@ -239,6 +239,11 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+function fmtSigned(n) {
+  const v = Math.round((n || 0) * 100) / 100;
+  return (v >= 0 ? '+' : '') + v;
+}
+
 // One-time fix: an early cafe-pos test pushed a settlement with all-zero
 // cash/TnG/bank via the webhook, which is now the "latest" settlement and
 // displaced the correct real balance on the dashboard. Guarded by an env
@@ -287,6 +292,27 @@ if (process.env.SETTLE_CARDFIX_20261114 === '1') {
     });
     db.saveSettlements(__settlements2);
     console.log('[youth-budget] applied SETTLE_CARDFIX_20261114 migration');
+  }
+}
+
+// One-time fix: before today's fix, the cafe-settlement webhook took
+// cafe-pos's own cash/bank numbers (its own drawer/wallet count) and used
+// them as an absolute OVERWRITE of Finance's cash/bank, instead of adding
+// the increase the way it already correctly did for TnG. Every settlement
+// the webhook pushed under that old code is missing a `cashIncrease` field
+// (today's fix always sets one), so that's how we find them. Removing them
+// makes computeBalanceBreakdown() fall back to the next most recent real
+// settlement and recompute the live balance from the (correctly tracked)
+// transaction ledger since then — no manual number-guessing involved.
+// Guarded by an env var; safe to leave on since a second run finds nothing
+// left to remove.
+if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
+  const __settlements3 = db.getSettlements();
+  const __bad = __settlements3.filter((s) => s.source === 'cafe-pos' && typeof s.cashIncrease !== 'number');
+  if (__bad.length) {
+    const __kept = __settlements3.filter((s) => !(s.source === 'cafe-pos' && typeof s.cashIncrease !== 'number'));
+    db.saveSettlements(__kept);
+    console.log('[youth-budget] removed', __bad.length, 'pre-fix cafe-pos settlement(s) that had overwritten cash/bank:', __bad.map((s) => s.id));
   }
 }
 
@@ -474,19 +500,25 @@ async function doPerformCafeSync({ skipAutoSettlement = false, fullRescan = fals
   return { added: toAdd.length, needsReview: toAdd.filter((t) => t.tag === 'needs-review').length };
 }
 
-// Queue wrapper: every call to performCafeSync (manual button, webhook, or
-// a recovery fullRescan) is chained onto this promise, so calls are always
-// run strictly one after another even if two requests arrive milliseconds
-// apart — never two at once reading the same "before" state and both
-// deciding the same row is new.
-let cafeSyncQueue = Promise.resolve();
-function performCafeSync(opts) {
-  const run = cafeSyncQueue.then(() => doPerformCafeSync(opts));
-  cafeSyncQueue = run.then(
+// Queue wrapper: every operation that reads-then-writes the transaction or
+// settlement ledgers (the manual sync button, a recovery fullRescan, and
+// the settlement webhook's sync-then-settle sequence below) is chained onto
+// this one promise, so they always run strictly one after another even if
+// two requests arrive milliseconds apart — never two at once reading the
+// same "before" state and both deciding the same row (or the same
+// increase) is new.
+let cafeOpsQueue = Promise.resolve();
+function queueCafeOp(fn) {
+  const run = cafeOpsQueue.then(fn);
+  cafeOpsQueue = run.then(
     () => {},
     () => {}
   );
   return run;
+}
+
+function performCafeSync(opts) {
+  return queueCafeOp(() => doPerformCafeSync(opts));
 }
 
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
@@ -565,54 +597,108 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
   if (req.headers['x-webhook-secret'] !== secret) {
     return res.status(401).json({ error: 'invalid webhook secret' });
   }
-  // 현금/은행은 카페가 보고한 절대 금액을 그대로 새 기준으로 삼지만, 터치앤고는
-  // 다르다 — 카페의 터치앤고 지갑 잔액을 그대로 가져오면 안 되고, 카페 정산에서
-  // "이번에 얼마나 늘었는지"(증가액)만 파이낸스의 현재 터치앤고 잔액에 더해야
-  // 한다. 카페 지갑과 파이낸스가 보는 터치앤고는 같은 숫자가 아니기 때문.
-  const { date, cash, tngIncrease, bank, memo } = req.body || {};
-  if (typeof cash !== 'number' || typeof tngIncrease !== 'number') {
-    return res.status(400).json({ error: 'cash and tngIncrease must be numbers' });
+  // 카페(jusumcafe)의 현금/터치앤고/은행 숫자는 카페 자신의 서랍/지갑/계좌
+  // 기준일 뿐, 파이낸스 전체(회비·수동입력 포함)의 전부가 아니다. 그래서
+  // 셋 다 "카페 쪽에서 이번에 얼마나 늘었는지(증가분)"만 받아서 파이낸스의
+  // 현재 잔액에 더한다 — 카페가 보낸 절대금액으로 그대로 덮어쓰면, 그 사이
+  // 회비 입금이나 수동 입력으로 쌓인 파이낸스 자체의 현금/은행 잔액이 통째로
+  // 사라진다(실제로 이 버그 때문에 은행 잔액이 한 번에 0 근처로 사라졌었음).
+  const { date, cashIncrease, tngIncrease, bankIncrease, memo, externalId } = req.body || {};
+  if (typeof cashIncrease !== 'number' || typeof tngIncrease !== 'number' || typeof bankIncrease !== 'number') {
+    return res.status(400).json({ error: 'cashIncrease, tngIncrease, and bankIncrease must all be numbers' });
   }
-  const bankVal = typeof bank === 'number' ? bank : null;
-  // Snapshot tng BEFORE the sync below touches the ledger. tngIncrease (from
-  // cafe-pos) already accounts for every order since cafe-pos's last
-  // settlement, including the ones about to be synced in — so this has to
-  // be the pre-sync figure, or the orders we're about to pull in would get
-  // counted twice (once via tngIncrease, once via their own channel delta).
-  const currentTng = computeBalanceBreakdown().current.tng;
-  const tng = currentTng + tngIncrease;
 
-  // "정산 전송" 버튼 한 번으로 잔액뿐 아니라 그동안 쌓인 주문/지출 내역도
-  // 같이 가져오도록, 새 정산 기준점을 기록하기 전에 먼저 카페 동기화를
-  // 돌린다. 동기화된 거래들의 createdAt이 아래에서 저장할 정산 기준점의
-  // createdAt보다 앞서게 되므로, 그 기준점 이후의 증감만 다시 더하는
-  // computeBalanceBreakdown 로직에서 중복으로 잡히지 않는다 — 방금 센
-  // 실제 현금/증가분(cash/tngIncrease)에 이미 반영돼 있는 거래이기 때문.
-  // 동기화가 실패해도(환경변수 누락, 네트워크 오류 등) 정산 자체는
-  // 실패시키지 않는다 — 정산이 더 중요하므로.
-  let cafeSync = null;
+  // The whole read-sync-write sequence below runs as one queued operation
+  // (same queue performCafeSync uses) so that two overlapping webhook
+  // deliveries — a retry, or a second "정산 전송" press landing before the
+  // first finishes — can never both read the same "before" balance and
+  // both apply their increase on top of it. doPerformCafeSync (not the
+  // queued performCafeSync wrapper) is called directly here since we're
+  // already running inside the queue.
   try {
-    cafeSync = await performCafeSync({ skipAutoSettlement: true });
+    const entry = await queueCafeOp(async () => {
+      // externalId identifies which cafe-pos settlement record this push
+      // is for. cafe-pos resends the same settlement (same externalId)
+      // when an admin edits a mistyped entry there — in that case this
+      // isn't a NEW increase on top of the old one, it's a CORRECTION to
+      // it. We only ever apply the difference between the new increase
+      // and whatever increase we already applied for that same
+      // externalId, so editing a cafe-pos settlement twice (or resending
+      // after a webhook hiccup) can't double (or triple) count the same
+      // sales.
+      const list = db.getSettlements();
+      const existing = externalId ? list.find((s) => s.externalId === externalId) : null;
+      const appliedCashIncrease = cashIncrease - (existing ? existing.cashIncrease || 0 : 0);
+      const appliedTngIncrease = tngIncrease - (existing ? existing.tngIncrease || 0 : 0);
+      const appliedBankIncrease = bankIncrease - (existing ? existing.bankIncrease || 0 : 0);
+
+      // Snapshot the current balance BEFORE the sync below touches the
+      // ledger. The increases above (from cafe-pos) already account for
+      // every order since cafe-pos's last settlement, including the ones
+      // about to be synced in as transactions — so this has to be the
+      // pre-sync figure, or those orders would get counted twice (once via
+      // the increase, once via their own channel delta once synced in).
+      const before = computeBalanceBreakdown().current;
+      const cash = before.cash + appliedCashIncrease;
+      const tng = before.tng + appliedTngIncrease;
+      const bank = before.bank + appliedBankIncrease;
+
+      // "정산 전송" 버튼 한 번으로 잔액뿐 아니라 그동안 쌓인 주문/지출
+      // 내역도 같이 가져오도록, 새 정산 기준점을 기록하기 전에 먼저 카페
+      // 동기화를 돌린다. 동기화된 거래들의 createdAt이 아래에서 저장할
+      // 정산 기준점의 createdAt보다 앞서게 되므로, 그 기준점 이후의
+      // 증감만 다시 더하는 computeBalanceBreakdown 로직에서 중복으로
+      // 잡히지 않는다 — 방금 센 실제 증가분에 이미 반영돼 있는 거래이기
+      // 때문. 동기화가 실패해도(환경변수 누락, 네트워크 오류 등) 정산
+      // 자체는 실패시키지 않는다 — 정산이 더 중요하므로.
+      let cafeSync = null;
+      try {
+        cafeSync = await doPerformCafeSync({ skipAutoSettlement: true });
+      } catch (e) {
+        console.error('[youth-budget] cafe-settlement 웹훅 이전 카페 동기화 실패:', e.message);
+      }
+
+      const memoText = memo || `카페 정산 자동 반영 (현금 ${fmtSigned(cashIncrease)}, TnG ${fmtSigned(tngIncrease)}, 은행 ${fmtSigned(bankIncrease)})`;
+      let entry;
+      if (existing) {
+        existing.date = date || existing.date;
+        existing.cash = cash;
+        existing.tng = tng;
+        existing.bank = bank;
+        existing.total = cash + tng + bank;
+        existing.cashIncrease = cashIncrease;
+        existing.tngIncrease = tngIncrease;
+        existing.bankIncrease = bankIncrease;
+        existing.memo = memoText;
+        existing.updatedAt = new Date().toISOString();
+        entry = existing;
+      } else {
+        entry = {
+          id: 'settle_' + uid(),
+          date: date || todayStr(),
+          cash,
+          tng,
+          bank,
+          total: cash + tng + bank,
+          source: 'cafe-pos',
+          externalId: externalId || null,
+          cashIncrease,
+          tngIncrease,
+          bankIncrease,
+          memo: memoText,
+          createdAt: new Date().toISOString()
+        };
+        list.push(entry);
+      }
+      db.saveSettlements(list);
+
+      return cafeSync ? Object.assign({}, entry, { cafeSync }) : entry;
+    });
+
+    res.status(201).json(entry);
   } catch (e) {
-    console.error('[youth-budget] cafe-settlement 웹훅 이전 카페 동기화 실패:', e.message);
+    res.status(500).json({ error: e.message });
   }
-
-  const entry = {
-    id: 'settle_' + uid(),
-    date: date || todayStr(),
-    cash,
-    tng,
-    bank: bankVal,
-    total: cash + tng + (bankVal || 0),
-    source: 'cafe-pos',
-    memo: memo || `카페 정산 자동 반영 (터치앤고 +${tngIncrease})`,
-    createdAt: new Date().toISOString()
-  };
-  const list = db.getSettlements();
-  list.push(entry);
-  db.saveSettlements(list);
-
-  res.status(201).json(cafeSync ? Object.assign({}, entry, { cafeSync }) : entry);
 });
 
 // ---------------- Admin-only API ----------------
