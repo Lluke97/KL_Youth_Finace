@@ -405,7 +405,26 @@ app.get('/api/balance-breakdown', (req, res) => {
 // a duplicate rather than useful information. The standalone manual
 // "새 내역 가져오기" button (the other caller) has no such real settlement
 // following it, so it keeps the breadcrumb (default false = keep it).
-async function performCafeSync({ skipAutoSettlement = false } = {}) {
+//
+// fullRescan: the normal flow only asks cafe-pos for orders/expenses newer
+// than the saved cursor (lastOrderAt/lastExpenseCreatedAt), so once that
+// cursor has moved past something, a transaction that gets deleted here
+// (by mistake, or during cleanup) can never come back on a normal press —
+// it's simply older than the cursor. fullRescan re-asks cafe-pos for its
+// ENTIRE order/expense history instead of just what's new. This is safe to
+// press any number of times, including back-to-back, because every row is
+// still deduped by externalId below: anything still present is skipped,
+// and only rows that are genuinely missing (i.e. were deleted, or never
+// made it in) get re-added. The saved cursor itself is never moved
+// backwards by this — see below — so it doesn't change how normal syncs
+// behave afterwards.
+// performCafeSync itself is queued below (search "cafeSyncQueue") so that
+// pressing the button several times fast, or a webhook press landing while
+// a manual sync is still mid-flight, can never run two syncs at once — each
+// one reads the cursor/transaction list only after the previous one has
+// fully written its results, so a repeat press that found nothing new
+// correctly reports added: 0 instead of re-adding the same rows.
+async function doPerformCafeSync({ skipAutoSettlement = false, fullRescan = false } = {}) {
   const baseUrl = process.env.CAFE_BASE_URL || 'https://jusumcafe.up.railway.app';
   const user = process.env.CAFE_ADMIN_USER;
   const pass = process.env.CAFE_ADMIN_PASS;
@@ -413,7 +432,8 @@ async function performCafeSync({ skipAutoSettlement = false } = {}) {
     throw new Error('CAFE_ADMIN_USER / CAFE_ADMIN_PASS 환경변수가 설정되어 있지 않습니다 (cafe-pos의 ADMIN_USER/ADMIN_PASS와 동일한 값).');
   }
   const settings = db.getSettings();
-  const { newTxns, lastOrderAt, lastExpenseCreatedAt } = await syncCafe({ baseUrl, user, pass, since: settings.cafeSync });
+  const fetchSince = fullRescan ? { lastOrderAt: null, lastExpenseCreatedAt: null } : settings.cafeSync;
+  const { newTxns, lastOrderAt, lastExpenseCreatedAt } = await syncCafe({ baseUrl, user, pass, since: fetchSince });
 
   const txns = db.getTransactions();
   const existingIds = new Set(txns.map((t) => t.externalId).filter(Boolean));
@@ -421,7 +441,15 @@ async function performCafeSync({ skipAutoSettlement = false } = {}) {
   toAdd.forEach((t) => txns.push(t));
   db.saveTransactions(txns);
 
-  settings.cafeSync = { lastOrderAt, lastExpenseCreatedAt };
+  // Only ever move the cursor forward. On a normal sync this is a no-op
+  // (lastOrderAt/lastExpenseCreatedAt already come out >= the saved
+  // cursor). On a fullRescan it stops the cursor from being reset
+  // backwards to the start of history, which would otherwise make the
+  // *next* normal press re-scan everything again.
+  settings.cafeSync = {
+    lastOrderAt: (lastOrderAt || '') > (settings.cafeSync.lastOrderAt || '') ? lastOrderAt : settings.cafeSync.lastOrderAt,
+    lastExpenseCreatedAt: (lastExpenseCreatedAt || '') > (settings.cafeSync.lastExpenseCreatedAt || '') ? lastExpenseCreatedAt : settings.cafeSync.lastExpenseCreatedAt
+  };
   db.saveSettings(settings);
 
   // One settlement row for the whole sync, not one per order, so the
@@ -444,6 +472,21 @@ async function performCafeSync({ skipAutoSettlement = false } = {}) {
   }
 
   return { added: toAdd.length, needsReview: toAdd.filter((t) => t.tag === 'needs-review').length };
+}
+
+// Queue wrapper: every call to performCafeSync (manual button, webhook, or
+// a recovery fullRescan) is chained onto this promise, so calls are always
+// run strictly one after another even if two requests arrive milliseconds
+// apart — never two at once reading the same "before" state and both
+// deciding the same row is new.
+let cafeSyncQueue = Promise.resolve();
+function performCafeSync(opts) {
+  const run = cafeSyncQueue.then(() => doPerformCafeSync(opts));
+  cafeSyncQueue = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
 }
 
 // A ready-to-fill CSV so bulk upload isn't a guessing game about column
@@ -819,7 +862,8 @@ app.delete('/api/admin/settlements/:id', (req, res) => {
 
 app.post('/api/admin/sync-cafe', async (req, res) => {
   try {
-    const result = await performCafeSync();
+    const fullRescan = !!(req.body && req.body.full);
+    const result = await performCafeSync({ fullRescan });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });

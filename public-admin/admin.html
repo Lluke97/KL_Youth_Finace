@@ -82,13 +82,18 @@
 <main>
   <section class="block admin-section" id="sync">
     <h2>카페 데이터 동기화 / 백업</h2>
-    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페(jusumcafe)에서 "정산 전송"을 누르면 잔액뿐 아니라 그동안의 주문/지출 내역도 자동으로 같이 들어와요. 이 버튼은 정산 전송 전에 미리 확인하고 싶을 때나, 자동 동기화가 실패했을 때 수동으로 다시 가져오는 용도예요.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">카페(jusumcafe)에서 "정산 전송"을 누르면 잔액뿐 아니라 그동안의 주문/지출 내역도 자동으로 같이 들어와요. 이 버튼은 정산 전송 전에 미리 확인하고 싶을 때나, 자동 동기화가 실패했을 때 수동으로 다시 가져오는 용도예요. 여러 번 눌러도 이미 들어온 내역은 다시 추가되지 않아요.</p>
     <div class="row-actions">
-      <button class="primary" onclick="syncCafe()">카페(jusumcafe)에서 새 내역 가져오기</button>
+      <button class="primary" id="syncBtn" onclick="syncCafe()">카페(jusumcafe)에서 새 내역 가져오기</button>
       <a class="ghost" href="/api/admin/export-xlsx">📊 엑셀로 내보내기 (전체내역·구매지출·수입·카페동기화·정산 시트별로)</a>
       <button class="ghost" onclick="exportSheet()">구글 시트로 내보내기 (설정 필요)</button>
     </div>
     <p id="syncResult" style="font-size:13px;color:var(--muted);margin-top:8px;"></p>
+    <hr style="border-color:var(--border, #333);margin:16px 0;">
+    <p style="font-size:12px;color:var(--muted);margin-top:0;">실수로 내역을 지웠거나, 카페 쪽 내역이 분명히 있는데 리스트에 안 보이는 경우 — 위 버튼은 "마지막으로 가져온 지점 이후"만 보기 때문에 이미 지나간 날짜 건은 다시 못 가져와요. 아래 버튼은 카페의 전체 주문/지출 기록을 처음부터 다시 훑어서, 지금 빠져있는 것만 골라 복구해요. 이미 있는 내역은 건드리지 않고, 여러 번 눌러도 안전해요.</p>
+    <div class="row-actions">
+      <button class="ghost" id="syncFullBtn" onclick="syncCafeFull()">🔁 빠진/지워진 내역 복구 (카페 전체 다시 확인)</button>
+    </div>
   </section>
 
   <section class="block admin-section" id="settlement">
@@ -374,16 +379,37 @@ function toast(msg) {
   setTimeout(() => (t.style.display = 'none'), 3000);
 }
 
-async function syncCafe() {
-  const res = await fetch('/api/admin/sync-cafe', { method: 'POST' });
-  const data = await res.json();
+async function runCafeSync(full) {
+  const btn = document.getElementById(full ? 'syncFullBtn' : 'syncBtn');
   const el = document.getElementById('syncResult');
-  if (res.ok) {
-    el.textContent = `${data.added}건 추가됨 (분류 확인 필요: ${data.needsReview}건)`;
-    loadAll();
-  } else {
-    el.textContent = '오류: ' + data.error;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/admin/sync-cafe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full: !!full })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      el.textContent = full
+        ? `전체 다시 확인 완료 — 새로 복구된 내역 ${data.added}건 (분류 확인 필요: ${data.needsReview}건)`
+        : `${data.added}건 추가됨 (분류 확인 필요: ${data.needsReview}건)`;
+      loadAll();
+    } else {
+      el.textContent = '오류: ' + data.error;
+    }
+  } finally {
+    btn.disabled = false;
   }
+}
+
+async function syncCafe() {
+  await runCafeSync(false);
+}
+
+async function syncCafeFull() {
+  if (!confirm('카페의 전체 주문/지출 기록을 처음부터 다시 훑어서, 지금 Finance에 빠져있는 내역만 복구합니다. 이미 있는 내역은 건드리지 않습니다. 계속할까요?')) return;
+  await runCafeSync(true);
 }
 
 async function exportSheet() {
