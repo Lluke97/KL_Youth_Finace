@@ -175,7 +175,7 @@
       <h3>최근 구매 지출 (최근 10건 · 바로 수정/삭제 가능)</h3>
       <div class="mini-table-wrap">
         <table id="purchaseRecentTable">
-          <thead><tr><th>날짜</th><th>카테고리</th><th>품목</th><th>결제</th><th class="amount">금액</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>품목</th><th>결제</th><th class="amount">금액</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -222,7 +222,7 @@
       <h3>최근 수입 (최근 10건 · 바로 수정/삭제 가능)</h3>
       <div class="mini-table-wrap">
         <table id="incomeRecentTable">
-          <thead><tr><th>날짜</th><th>카테고리</th><th>낸 사람</th><th>받은 방법</th><th class="amount">금액</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>낸 사람</th><th>받은 방법</th><th class="amount">금액</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -507,6 +507,10 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
 });
 
 const SOURCE_LABEL = { 'cafe-pos': '카페 자동', manual: '직접입력', auto: '자동 반영' };
+// Labels for transaction.source (different value set from settlement.source above:
+// cafe = cafe-pos 자동 동기화, manual = 수동 입력, membership = 회비 입력)
+const TX_SOURCE_LABEL = { cafe: '☕ 카페', manual: '✏️ 수동입력', membership: '✏️ 회비', carryover: '📦 이월' };
+function txSourceLabel(source) { return TX_SOURCE_LABEL[source] || source; }
 
 document.getElementById('settlementForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -646,7 +650,7 @@ function buildTagSelect(t) {
 function txRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td>${t.date}</td>
-      <td>${t.source}</td>
+      <td>${txSourceLabel(t.source)}</td>
       <td>${t.category}</td>
       <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}${t.payer ? ' · ' + t.payer : ''}${t.payment ? ' · ' + t.payment : ''}${t.receiveChannel ? ' · ' + t.receiveChannel : ''}${t.receiptUrl ? ` · <a href="${t.receiptUrl}" target="_blank">영수증</a>` : ''}</td>
       <td class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</td>
@@ -660,7 +664,7 @@ function txRowHtml(t) {
 function txEditRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
-      <td>${t.source}</td>
+      <td>${txSourceLabel(t.source)}</td>
       <td><input type="text" class="edit-input" data-f="category" value="${(t.category || '').replace(/"/g, '&quot;')}"></td>
       <td><input type="text" class="edit-input" data-f="item" value="${(t.item || '').replace(/"/g, '&quot;')}"></td>
       <td>
@@ -747,6 +751,7 @@ const esc = (s) => (s || '').replace(/"/g, '&quot;');
 function purchaseRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td>${t.date}</td>
+      <td>${txSourceLabel(t.source)}</td>
       <td>${t.category}</td>
       <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}</td>
       <td>${t.payment || ''}</td>
@@ -758,6 +763,7 @@ function purchaseEditRowHtml(t) {
   const payOpts = paymentMethodsList.map((c) => `<option value="${c}" ${c === t.payment ? 'selected' : ''}>${c}</option>`).join('');
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
+      <td>${txSourceLabel(t.source)}</td>
       <td><select class="edit-input" data-f="category">${opts}</select></td>
       <td><input type="text" class="edit-input" data-f="item" value="${esc(t.item)}"></td>
       <td><select class="edit-input" data-f="payment">${payOpts}</select></td>
@@ -770,6 +776,7 @@ const CHANNEL_BUCKET_LABEL = { cash: '현금', tng: '터치앤고', bank: '계�
 function incomeRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td>${t.date}</td>
+      <td>${txSourceLabel(t.source)}</td>
       <td>${t.category}</td>
       <td>${t.payer || ''}</td>
       <td>${t.receiveChannel || (t.channel ? CHANNEL_BUCKET_LABEL[t.channel] : '') || ''}</td>
@@ -781,6 +788,7 @@ function incomeEditRowHtml(t) {
   const chOpts = ['cash', 'tng', 'bank'].map((b) => `<option value="${b}" ${b === t.channel ? 'selected' : ''}>${CHANNEL_BUCKET_LABEL[b]}</option>`).join('');
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
+      <td>${txSourceLabel(t.source)}</td>
       <td><select class="edit-input" data-f="category">${opts}</select></td>
       <td><input type="text" class="edit-input" data-f="payer" value="${esc(t.payer)}"></td>
       <td><select class="edit-input" data-f="channel">${chOpts}</select></td>
@@ -813,8 +821,8 @@ function manualEditRowHtml(t) {
 }
 
 const MINI_TABLES = {
-  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 6 },
-  incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 6 },
+  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 7 },
+  incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 7 },
   manualRecentTable: { row: manualRowHtml, edit: manualEditRowHtml, cols: 6 }
 };
 
@@ -860,11 +868,15 @@ function bindMiniTableEvents(tableId) {
 
 function renderRecentLists() {
   const byCreatedDesc = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '');
+  // 카페(cafe-pos 자동 동기화) 항목은 자체 카테고리(원재료/운영비/카페 매출 등)를 쓰기
+  // 때문에 청년부 전용 카테고리 목록에는 안 걸림 — source === 'cafe'면 카테고리와
+  // 상관없이 구매지출/수입 목록에 포함시킨다. 금액은 그대로 가져오기만 할 뿐 여기서
+  // 다시 더하지는 않으므로(단순 표시 필터) 중복 계산 걱정은 없다.
   const purchaseRows = txCache
-    .filter((t) => t.type === 'expense' && purchaseCategoriesList.includes(t.category))
+    .filter((t) => t.type === 'expense' && (t.source === 'cafe' || purchaseCategoriesList.includes(t.category)))
     .sort(byCreatedDesc).slice(0, MINI_LIMIT);
   const incomeRows = txCache
-    .filter((t) => t.type === 'income' && incomeCategoriesList.includes(t.category))
+    .filter((t) => t.type === 'income' && (t.source === 'cafe' || incomeCategoriesList.includes(t.category)))
     .sort(byCreatedDesc).slice(0, MINI_LIMIT);
   const shownIds = new Set([...purchaseRows, ...incomeRows].map((t) => t.id));
   const manualRows = txCache
