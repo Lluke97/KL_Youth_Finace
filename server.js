@@ -40,6 +40,24 @@ function channelToBucket(channel) {
   if (channel === '계좌이체') return 'bank';
   return null;
 }
+
+// 카페 재정과 청년부 재정을 완전히 분리된 두 계좌로 다룬다. 거래 데이터엔
+// 이미 source(cafe/membership/manual/carryover)가 있으니 그대로 재사용:
+// source==='cafe'는 카페 자신의 서랍/계좌에서 실제로 나간(들어온) 돈이고,
+// 그 외는 청년부 자체 회계다. 카페 돈으로 청년모임 식사 등을 "직접" 결제한
+// 지출(태그 youth-general)도 실제로는 카페 쪽 현금/계좌에서 빠져나간
+// 것이므로 카페 계좌에서 그대로 차감한다 — 그 지출의 용도(카페운영 vs
+// 청년부지원)는 기존 "구분별 요약" 표가 별도로 보여준다. 카페에서 청년부로
+// 실제 현금/계좌이전이 일어난 경우는 /api/admin/transfer로 명시적으로
+// account를 지정해 기록하므로, 거기서 저장된 값이 항상 우선한다.
+function txnAccount(t) {
+  if (t && (t.account === 'cafe' || t.account === 'youth')) return t.account;
+  return t && t.source === 'cafe' ? 'cafe' : 'youth';
+}
+function settlementAccount(s) {
+  if (s && (s.account === 'cafe' || s.account === 'youth')) return s.account;
+  return s && s.source === 'cafe-pos' ? 'cafe' : 'youth';
+}
 const CHANNEL_LABEL = { cash: '현금', tng: '터치앤고', bank: '계좌/카드' };
 
 // Receipt photos live on the same Railway volume as the JSON data, so they
@@ -347,7 +365,7 @@ app.get('/api/receive-channels', (req, res) => {
 // cafe-pos doesn't record a payment method for those) can't be placed in
 // any bucket and are called out separately so the gap is visible instead
 // of silently wrong.
-function computeBalanceBreakdown() {
+function computeAccountBreakdown(account) {
   // Only a real physical-count baseline (manual entry or the cafe-pos
   // settlement webhook) is used as the anchor — never an "auto" row, which
   // is just a snapshot of this same calculation at an earlier moment. If an
@@ -356,11 +374,16 @@ function computeBalanceBreakdown() {
   // (it would already be "baked into" the frozen baseline forever). Always
   // anchoring on the last real count and re-summing every transaction that
   // still exists since then means a delete/edit anywhere is reflected
-  // immediately, with no stale numbers to clean up.
-  const settlements = db.getSettlements().filter((s) => s.source !== 'auto').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // immediately, with no stale numbers to clean up. Both the settlement
+  // history and the transaction ledger are filtered to this one account
+  // (카페 vs 청년부) first, so each account's baseline/delta math never
+  // crosses into the other's money.
+  const settlements = db.getSettlements()
+    .filter((s) => s.source !== 'auto' && settlementAccount(s) === account)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const baseline = settlements[0] || null;
   const baselineCreatedAt = baseline ? baseline.createdAt : null;
-  const txns = db.getTransactions();
+  const txns = db.getTransactions().filter((t) => txnAccount(t) === account);
 
   let cash = 0, tng = 0, bank = 0, unattributedCount = 0, unattributedAmount = 0;
   txns.forEach((t) => {
@@ -377,6 +400,7 @@ function computeBalanceBreakdown() {
   const baseBank = baseline ? (baseline.bank || 0) : 0;
 
   return {
+    account,
     baseline: baseline ? { date: baseline.date, cash: baseCash, tng: baseTng, bank: baseBank } : null,
     deltas: { cash, tng, bank },
     current: {
@@ -390,6 +414,34 @@ function computeBalanceBreakdown() {
   };
 }
 
+// account: 'youth' | 'cafe' | undefined/'all'. 'all'은 두 계좌를 각자 계산한
+// 뒤 숫자만 더한 것 — 기준점(baseline)은 계좌마다 다른 시점일 수 있어 하나로
+// 합쳐 보여줄 의미가 없으므로 null로 둔다(각 계좌의 baseline은 byAccount에
+// 들어있음).
+function computeBalanceBreakdown(account) {
+  if (account === 'cafe' || account === 'youth') return computeAccountBreakdown(account);
+  const youth = computeAccountBreakdown('youth');
+  const cafe = computeAccountBreakdown('cafe');
+  return {
+    account: 'all',
+    baseline: null,
+    deltas: {
+      cash: youth.deltas.cash + cafe.deltas.cash,
+      tng: youth.deltas.tng + cafe.deltas.tng,
+      bank: youth.deltas.bank + cafe.deltas.bank
+    },
+    current: {
+      cash: youth.current.cash + cafe.current.cash,
+      tng: youth.current.tng + cafe.current.tng,
+      bank: youth.current.bank + cafe.current.bank,
+      total: youth.current.total + cafe.current.total
+    },
+    unattributedCount: youth.unattributedCount + cafe.unattributedCount,
+    unattributedAmount: youth.unattributedAmount + cafe.unattributedAmount,
+    byAccount: { youth, cafe }
+  };
+}
+
 // Called right after a channel-tagged income/expense is saved, so the 정산
 // (settlement) history gets a new row reflecting the up-to-date cash/TnG/
 // bank split automatically — instead of requiring a fresh manual count each
@@ -397,10 +449,12 @@ function computeBalanceBreakdown() {
 // left out (same as in computeBalanceBreakdown) and no row is added for it.
 function recordAutoSettlement(txn) {
   if (!txn || !txn.channel) return;
-  const b = computeBalanceBreakdown();
+  const account = txnAccount(txn);
+  const b = computeAccountBreakdown(account);
   const entry = {
     id: 'settle_' + uid(),
     date: txn.date,
+    account,
     cash: b.current.cash,
     tng: b.current.tng,
     bank: b.current.bank,
@@ -416,7 +470,7 @@ function recordAutoSettlement(txn) {
 }
 
 app.get('/api/balance-breakdown', (req, res) => {
-  res.json(computeBalanceBreakdown());
+  res.json(computeBalanceBreakdown(req.query.account));
 });
 
 // Shared by the manual "카페에서 새 내역 가져오기" button (POST /api/admin/sync-cafe)
@@ -481,11 +535,12 @@ async function doPerformCafeSync({ skipAutoSettlement = false, fullRescan = fals
   // One settlement row for the whole sync, not one per order, so the
   // 정산 history doesn't get flooded by a busy day at the cafe.
   if (!skipAutoSettlement && toAdd.some((t) => t.channel)) {
-    const b = computeBalanceBreakdown();
+    const b = computeAccountBreakdown('cafe'); // 동기화되는 거래는 전부 카페 쪽 계좌
     const list = db.getSettlements();
     list.push({
       id: 'settle_' + uid(),
       date: todayStr(),
+      account: 'cafe',
       cash: b.current.cash,
       tng: b.current.tng,
       bank: b.current.bank,
@@ -536,19 +591,22 @@ app.get('/api/admin/bulk-template.csv', maybeRequireAdmin, (req, res) => {
 
 app.get('/api/transactions', (req, res) => {
   let txns = db.getTransactions();
-  const { from, to, source, type, tag, category } = req.query;
+  const { from, to, source, type, tag, category, account } = req.query;
   if (from) txns = txns.filter((t) => t.date >= from);
   if (to) txns = txns.filter((t) => t.date <= to);
   if (source) txns = txns.filter((t) => t.source === source);
   if (type) txns = txns.filter((t) => t.type === type);
   if (tag) txns = txns.filter((t) => t.tag === tag);
   if (category) txns = txns.filter((t) => t.category === category);
+  if (account === 'youth' || account === 'cafe') txns = txns.filter((t) => txnAccount(t) === account);
   txns.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   res.json(txns);
 });
 
 app.get('/api/summary', (req, res) => {
-  const txns = db.getTransactions();
+  let txns = db.getTransactions();
+  const { account } = req.query;
+  if (account === 'youth' || account === 'cafe') txns = txns.filter((t) => txnAccount(t) === account);
   let balance = 0;
   const bySource = {}; // source -> { income, expense }
   const byTag = {}; // tag -> { income, expense }  (cafe-ops / youth-general / needs-review)
@@ -638,7 +696,10 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
       // about to be synced in as transactions — so this has to be the
       // pre-sync figure, or those orders would get counted twice (once via
       // the increase, once via their own channel delta once synced in).
-      const before = computeBalanceBreakdown().current;
+      // This is the CAFE account's own balance, not the combined total —
+      // cafe-pos's drawer/wallet counts have nothing to do with 청년부's own
+      // cash/membership money, now that the two are fully separate.
+      const before = computeAccountBreakdown('cafe').current;
       const cash = before.cash + appliedCashIncrease;
       const tng = before.tng + appliedTngIncrease;
       const bank = before.bank + appliedBankIncrease;
@@ -662,6 +723,7 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
       let entry;
       if (existing) {
         existing.date = date || existing.date;
+        existing.account = 'cafe';
         existing.cash = cash;
         existing.tng = tng;
         existing.bank = bank;
@@ -676,6 +738,7 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
         entry = {
           id: 'settle_' + uid(),
           date: date || todayStr(),
+          account: 'cafe',
           cash,
           tng,
           bank,
@@ -705,7 +768,7 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
 app.use('/api/admin', maybeRequireAdmin);
 
 app.post('/api/admin/transactions', (req, res) => {
-  const { date, type, source, tag, category, item, amount, memo, author, channel } = req.body || {};
+  const { date, type, source, tag, category, item, amount, memo, author, channel, account } = req.body || {};
   if (!date || (type !== 'income' && type !== 'expense') || !category || typeof amount !== 'number' || amount <= 0) {
     return res.status(400).json({ error: 'date, type (income|expense), category and a positive amount are required' });
   }
@@ -714,6 +777,7 @@ app.post('/api/admin/transactions', (req, res) => {
     date,
     type,
     source: source || 'manual',
+    account: account === 'cafe' || account === 'youth' ? account : ((source || 'manual') === 'cafe' ? 'cafe' : 'youth'),
     tag: tag || null,
     category,
     item: item || category,
@@ -747,6 +811,7 @@ function createPurchaseEntry(req, res) {
     date,
     type: 'expense',
     source: 'manual',
+    account: 'youth',
     tag: 'youth-general',
     category,
     item,
@@ -789,6 +854,7 @@ app.post('/api/admin/income', (req, res) => {
     date,
     type: 'income',
     source: category === '회비' ? 'membership' : 'manual',
+    account: 'youth',
     tag: 'youth-general',
     category,
     item: payer ? `${category} - ${payer}` : category,
@@ -860,6 +926,7 @@ app.post('/api/admin/bulk-upload', uploadBulk.single('file'), (req, res) => {
       date,
       type,
       source: category === '회비' ? 'membership' : 'manual',
+      account: 'youth',
       tag: 'youth-general',
       category,
       item: item || category,
@@ -882,35 +949,49 @@ app.put('/api/admin/transactions/:id', (req, res) => {
   const txns = db.getTransactions();
   const idx = txns.findIndex((t) => t.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const fields = ['date', 'type', 'source', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'channel', 'amount', 'memo', 'author'];
+  const fields = ['date', 'type', 'source', 'account', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'channel', 'amount', 'memo', 'author'];
   fields.forEach((f) => { if (req.body && req.body[f] !== undefined) txns[idx][f] = req.body[f]; });
   db.saveTransactions(txns);
   res.json(txns[idx]);
 });
 
 app.delete('/api/admin/transactions/:id', (req, res) => {
-  const txns = db.getTransactions().filter((t) => t.id !== req.params.id);
+  const all = db.getTransactions();
+  const target = all.find((t) => t.id === req.params.id);
+  // A 이체(transfer)의 두 짝(카페쪽 지출 / 청년부쪽 수입)은 transferId로
+  // 묶여 있다 — 한쪽만 지우면 돈이 한쪽 계좌에서만 사라진 것처럼 보이는
+  // 반쪽짜리 기록이 남으므로, 삭제할 땐 짝도 같이 지운다.
+  const idsToRemove = new Set([req.params.id]);
+  if (target && target.transferId) {
+    all.forEach((t) => { if (t.transferId === target.transferId) idsToRemove.add(t.id); });
+  }
+  const txns = all.filter((t) => !idsToRemove.has(t.id));
   db.saveTransactions(txns);
-  // Remove the 정산 row that was auto-created for this transaction too, so
-  // the settlement history doesn't keep a stale entry for something that
-  // no longer exists. (The live balance total is unaffected either way —
-  // see computeBalanceBreakdown — this is just keeping the history honest.)
+  // Remove the 정산 row that was auto-created for this transaction (and its
+  // transfer sibling, if any) too, so the settlement history doesn't keep a
+  // stale entry for something that no longer exists. (The live balance
+  // total is unaffected either way — see computeBalanceBreakdown — this is
+  // just keeping the history honest.)
   const settlements = db.getSettlements();
-  const kept = settlements.filter((s) => s.txnId !== req.params.id);
+  const kept = settlements.filter((s) => !idsToRemove.has(s.txnId));
   if (kept.length !== settlements.length) db.saveSettlements(kept);
   res.json({ ok: true });
 });
 
 // Pull new orders/expenses from cafe-pos.
 // Manual settlement entry (e.g. seeding today's actual balances by hand).
+// account defaults to 'youth' since this form is for counting 청년부's own
+// cash/TnG/bank by hand — cafe's own count always comes in automatically via
+// the /api/webhook/cafe-settlement route instead.
 app.post('/api/admin/settlements', (req, res) => {
-  const { date, cash, tng, bank, memo } = req.body || {};
+  const { date, cash, tng, bank, memo, account } = req.body || {};
   if (typeof cash !== 'number' || typeof tng !== 'number' || typeof bank !== 'number') {
     return res.status(400).json({ error: 'cash, tng, bank must all be numbers' });
   }
   const entry = {
     id: 'settle_' + uid(),
     date: date || todayStr(),
+    account: account === 'cafe' ? 'cafe' : 'youth',
     cash,
     tng,
     bank,
@@ -929,15 +1010,75 @@ app.put('/api/admin/settlements/:id', (req, res) => {
   const list = db.getSettlements();
   const idx = list.findIndex((s) => s.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not found' });
-  const { date, cash, tng, bank, memo } = req.body || {};
+  const { date, cash, tng, bank, memo, account } = req.body || {};
   if (date !== undefined) list[idx].date = date;
   if (cash !== undefined) list[idx].cash = parseFloat(cash);
   if (tng !== undefined) list[idx].tng = parseFloat(tng);
   if (bank !== undefined) list[idx].bank = bank === '' || bank === null ? null : parseFloat(bank);
   if (memo !== undefined) list[idx].memo = memo;
+  if (account === 'cafe' || account === 'youth') list[idx].account = account;
   list[idx].total = list[idx].cash + list[idx].tng + (list[idx].bank || 0);
   db.saveSettlements(list);
   res.json(list[idx]);
+});
+
+// 카페 → 청년부 후원/이체: 실제로 카페 쪽 현금/계좌가 청년부 쪽으로 넘어갈
+// 때 관리자가 기록한다. 카페 계좌엔 지출, 청년부 계좌엔 수입으로 각각 한
+// 건씩 남아서 두 계좌 잔액에 모두 정확히 반영되고, "전체" 합계는 서로
+// 상쇄되어 바뀌지 않는다 — 실제로 바깥에서 돈이 들어오거나 나간 게 아니라
+// 두 계좌 사이에서만 옮겨졌기 때문. (카페 돈으로 청년모임 식사비 등을
+// "직접" 결제한 경우는 이 기능이 아니라 기존의 "청년부 일반지출" 태그로
+// 충분히 표현된다 — 그건 카페 계좌에서 바로 나간 지출일 뿐, 현금이 청년부
+// 손으로 넘어온 적이 없기 때문.)
+app.post('/api/admin/transfer', (req, res) => {
+  const { date, amount, memo, channel, author } = req.body || {};
+  const amountNum = parseFloat(amount);
+  if (!date || Number.isNaN(amountNum) || amountNum <= 0 || !RECEIVE_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: `date, 0보다 큰 amount, channel (${RECEIVE_CHANNELS.join('|')})이 필요합니다` });
+  }
+  const transferId = 'xfer_' + uid();
+  const ch = channelToBucket(channel);
+  const now = new Date().toISOString();
+  const outTxn = {
+    id: 'tx_' + uid(),
+    date,
+    type: 'expense',
+    source: 'transfer',
+    account: 'cafe',
+    tag: null,
+    category: '청년부 후원',
+    item: '청년부 후원/이체',
+    amount: amountNum,
+    channel: ch,
+    memo: memo || '',
+    author: author || '',
+    transferId,
+    externalId: null,
+    createdAt: now
+  };
+  const inTxn = {
+    id: 'tx_' + uid(),
+    date,
+    type: 'income',
+    source: 'transfer',
+    account: 'youth',
+    tag: 'youth-general',
+    category: '카페 후원금',
+    item: '카페 후원금',
+    amount: amountNum,
+    channel: ch,
+    memo: memo || '',
+    author: author || '',
+    transferId,
+    externalId: null,
+    createdAt: now
+  };
+  const txns = db.getTransactions();
+  txns.push(outTxn, inTxn);
+  db.saveTransactions(txns);
+  recordAutoSettlement(outTxn);
+  recordAutoSettlement(inTxn);
+  res.status(201).json({ out: outTxn, in: inTxn });
 });
 
 app.delete('/api/admin/settlements/:id', (req, res) => {

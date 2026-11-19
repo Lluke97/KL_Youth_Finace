@@ -37,8 +37,14 @@
 <main>
   <div class="warn-banner" id="reviewBanner"></div>
 
+  <div class="cat-toggle" id="accountToggle">
+    <div class="chip selected" data-account="">전체</div>
+    <div class="chip" data-account="youth">청년부</div>
+    <div class="chip" data-account="cafe">카페</div>
+  </div>
+
   <div class="balance-card">
-    <div class="label">현재 잔액 (장부 기준)</div>
+    <div class="label" id="balanceLabel">현재 잔액 (장부 기준)</div>
     <div class="value" id="balanceValue">—</div>
   </div>
 
@@ -125,8 +131,25 @@ document.querySelectorAll('#catToggle .chip').forEach((chip) => {
   });
 });
 
+let currentAccount = ''; // '' = 전체, 'youth', 'cafe'
+const ACCOUNT_LABEL = { '': '현재 잔액 (장부 기준)', youth: '청년부 잔액 (장부 기준)', cafe: '카페 잔액 (장부 기준)' };
+
+document.querySelectorAll('#accountToggle .chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#accountToggle .chip').forEach((c) => c.classList.remove('selected'));
+    chip.classList.add('selected');
+    currentAccount = chip.dataset.account;
+    document.getElementById('balanceLabel').textContent = ACCOUNT_LABEL[currentAccount];
+    refreshAll();
+  });
+});
+
+function withAccountQuery(url) {
+  return currentAccount ? `${url}?account=${currentAccount}` : url;
+}
+
 async function loadSummary() {
-  const res = await fetch('/api/summary');
+  const res = await fetch(withAccountQuery('/api/summary'));
   const s = await res.json();
 
   document.getElementById('balanceValue').textContent = fmt(s.balance);
@@ -205,13 +228,23 @@ let lastMonthly = null;
 let lastBalance = 0;
 
 async function loadSettlement() {
-  const res = await fetch('/api/balance-breakdown');
+  const res = await fetch(withAccountQuery('/api/balance-breakdown'));
   const b = await res.json();
   const block = document.getElementById('settlementBlock');
-  if (!b.baseline) { block.style.display = 'none'; return; }
+  // '전체' 탭은 청년부/카페 두 계좌를 단순 합산한 것이라 기준일(baseline)이
+  // 하나로 떨어지지 않는다 — 그래도 합계 카드는 그대로 보여주고, 안내문만
+  // 계좌별 기준일을 따로 언급하도록 바꾼다.
+  if (!b.baseline && !b.byAccount) { block.style.display = 'none'; return; }
   block.style.display = 'block';
-  document.getElementById('settlementNote').textContent =
-    `${b.baseline.date} 실제 확인 기준으로 그 뒤 입력된 수입/지출을 현금·터치앤고·계좌별로 자동 반영한 값입니다.`;
+  if (b.baseline) {
+    document.getElementById('settlementNote').textContent =
+      `${b.baseline.date} 실제 확인 기준으로 그 뒤 입력된 수입/지출을 현금·터치앤고·계좌별로 자동 반영한 값입니다.`;
+  } else {
+    const yDate = b.byAccount.youth.baseline ? b.byAccount.youth.baseline.date : '기록 없음';
+    const cDate = b.byAccount.cafe.baseline ? b.byAccount.cafe.baseline.date : '기록 없음';
+    document.getElementById('settlementNote').textContent =
+      `청년부·카페 두 계좌를 각자 최근 확인 기준(청년부 ${yDate} / 카페 ${cDate})으로 자동 반영한 뒤 합친 값입니다.`;
+  }
 
   const c = b.current;
   const cardsEl = document.getElementById('settlementCards');
