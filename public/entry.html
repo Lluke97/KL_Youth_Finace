@@ -18,7 +18,9 @@
   form.entry { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
   form.entry label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
   form.entry input, form.entry select {
-    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px;
+    /* 16px 미만이면 iOS Safari가 포커스 시 화면을 자동 확대해버려서
+       ("입력창 틀어짐"의 주 원인) 16px로 고정 */
+    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 16px;
     background: var(--card); color: var(--text); box-sizing: border-box;
   }
   form.entry .full { grid-column: 1 / -1; }

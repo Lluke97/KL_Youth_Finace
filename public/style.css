@@ -51,8 +51,13 @@ header.top {
   justify-content: space-between;
   gap: 12px;
 }
-header.top .title h1 { font-size: 20px; margin: 0 0 4px; }
-header.top .title p { margin: 0; color: var(--muted); font-size: 13px; }
+/* 플렉스 아이템은 기본적으로 min-width:auto라 내용(긴 제목)보다 좁게 줄어들지
+   못해서, 좁은 화면에서는 header.top 전체가 뷰포트보다 넓어져 페이지가
+   가로로 밀려버린다(화면이 통째로 옆으로 잘려 보이는 원인). title 쪽이
+   줄어들 수 있게(그리고 필요하면 단어 단위로 줄바꿈되게) 해서 막는다. */
+header.top .title { min-width: 0; flex: 1 1 auto; }
+header.top .title h1 { font-size: 20px; margin: 0 0 4px; word-break: keep-all; overflow-wrap: break-word; }
+header.top .title p { margin: 0; color: var(--muted); font-size: 13px; word-break: keep-all; overflow-wrap: break-word; }
 
 /* ---- hamburger nav menu (jump between pages/sections) ---- */
 .header-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
@@ -132,7 +137,10 @@ section.block h2 { font-size: 15px; margin: 0 0 12px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 600; font-size: 12px; }
+/* 좁은 열(예: "계좌")에서 두 글자가 세로로 쪼개져 줄바꿈되는 것 방지 —
+   표는 어차피 .table-scroll/.mini-table-wrap으로 가로 스크롤되니 한 줄
+   유지가 더 낫다 */
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
 td.amount { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pill {
   display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
@@ -148,7 +156,9 @@ a.admin-link:hover { text-decoration: underline; }
 
 .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .filters select, .filters input {
-  font-size: 12px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+  /* 16px 미만이면 iOS Safari가 포커스될 때 화면을 자동으로 확대해버려서
+     ("입력창 틀어짐"의 주 원인) 16px로 고정 */
+  font-size: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--card); color: var(--text);
 }
 
