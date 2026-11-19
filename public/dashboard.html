@@ -91,7 +91,7 @@ document.addEventListener('click', function () {
 
 const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleString();
 
-const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금' };
+const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금', transfer: '후원/이체' };
 const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
 
 // Distinct, non-income/expense color palette — one hue per category so the
