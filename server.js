@@ -334,6 +334,26 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 }
 
+// 집사님이 정리해서 넘겨준 이월 잔액(source==='carryover')은 사실 카페 쪽
+// 누적 자금이지 청년부 자체 돈이 아니므로, 카페/청년부 계좌 분리 이후엔
+// 카페 계좌로 분류해야 한다. 이미 account:'cafe'로 지정된 건 다시
+// 건드리지 않으므로(멱등) 매 배포/재시작마다 돌아도 안전 — 별도 env 게이트
+// 없이 둔다.
+(function reclassifyDeaconCarryoverAsCafe() {
+  const txns = db.getTransactions();
+  let changed = 0;
+  txns.forEach((t) => {
+    if (t.source === 'carryover' && t.account !== 'cafe') {
+      t.account = 'cafe';
+      changed += 1;
+    }
+  });
+  if (changed) {
+    db.saveTransactions(txns);
+    console.log('[youth-budget] 집사님 이월 잔액(carryover) 거래', changed, '건을 카페 계좌로 재분류했습니다.');
+  }
+})();
+
 // ---------------- Site-wide passcode gate (sensitive financial data) ----------------
 app.use(maybeRequireSiteAccess);
 
