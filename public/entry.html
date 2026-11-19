@@ -16,6 +16,10 @@
 <style>
   .wrap { max-width: 480px; margin: 24px auto; padding: 0 16px; }
   form.entry { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  /* 그리드 아이템은 기본 min-width:auto라 select 옵션 글자가 길면 그 칸이
+     자기 몫(1fr)보다 넓어지려 해서 옆 칸과 크기가 안 맞거나 겹쳐 보이던
+     원인 — min-width:0으로 1fr 몫만큼만 차지하게 강제 */
+  form.entry > div { min-width: 0; }
   form.entry label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
   form.entry input, form.entry select {
     /* 16px 미만이면 iOS Safari가 포커스 시 화면을 자동 확대해버려서
