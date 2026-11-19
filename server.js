@@ -821,7 +821,7 @@ app.post('/api/admin/transactions', (req, res) => {
 // anyone can add a new expense (like cafe-pos's entry screen), but editing
 // or deleting one is admin-only (see PUT/DELETE /api/admin/transactions/:id).
 function createPurchaseEntry(req, res) {
-  const { date, category, vendor, item, amount, memo, author, payment } = req.body || {};
+  const { date, category, vendor, item, amount, memo, author, payment, account } = req.body || {};
   const amountNum = parseFloat(amount);
   if (!date || !PURCHASE_CATEGORIES.includes(category) || !item || Number.isNaN(amountNum) || amountNum <= 0 || !PAYMENT_METHODS.includes(payment)) {
     return res.status(400).json({ error: `date, category (${PURCHASE_CATEGORIES.join('|')}), item, a positive amount, and payment (${PAYMENT_METHODS.join('|')}) are required` });
@@ -831,7 +831,11 @@ function createPurchaseEntry(req, res) {
     date,
     type: 'expense',
     source: 'manual',
-    account: 'youth',
+    // 밥값 등 청년부 지출이 카페 돈으로 결제되는 경우가 있어서, 어느
+    // 계좌에서 실제로 돈이 나갔는지 입력하는 사람이 고른다 — 기본은
+    // 청년부. tag(청년부 일반지출)는 account와 별개로 "용도"를 나타내는
+    // 값이라 account가 cafe여도 그대로 둔다.
+    account: account === 'cafe' ? 'cafe' : 'youth',
     tag: 'youth-general',
     category,
     item,

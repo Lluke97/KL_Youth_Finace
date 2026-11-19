@@ -168,11 +168,18 @@
 
   <section class="block admin-section" id="purchase">
     <h2>구매 지출 입력</h2>
-    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">간식·비품 등 청년부에서 쓴 돈을 기록하세요. 영수증 사진은 선택사항입니다.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">간식·비품 등 청년부에서 쓴 돈을 기록하세요. 영수증 사진은 선택사항입니다. 밥값처럼 카페 돈으로 결제한 경우엔 "어느 계좌에서 나갔는지"를 카페로 선택해주세요.</p>
     <form class="entry" id="purchaseForm" enctype="multipart/form-data">
       <div>
         <label>날짜</label>
         <input type="date" name="date" required>
+      </div>
+      <div>
+        <label>어느 계좌에서 나갔나요</label>
+        <select name="account">
+          <option value="youth" selected>청년부</option>
+          <option value="cafe">카페</option>
+        </select>
       </div>
       <div>
         <label>카테고리</label>
@@ -214,7 +221,7 @@
       <h3>최근 구매 지출 (최근 10건 · 바로 수정/삭제 가능)</h3>
       <div class="mini-table-wrap">
         <table id="purchaseRecentTable">
-          <thead><tr><th>날짜</th><th>소스</th><th>카테고리</th><th>품목</th><th>결제</th><th class="amount">금액</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>소스</th><th>계좌</th><th>카테고리</th><th>품목</th><th>결제</th><th class="amount">금액</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -850,6 +857,7 @@ function purchaseRowHtml(t) {
   return `<tr data-id="${t.id}">
       <td>${t.date}</td>
       <td>${txSourceLabel(t.source)}</td>
+      <td>${txAccountLabel(t)}</td>
       <td>${t.category}</td>
       <td>${t.item || ''}${t.vendor ? ' · ' + t.vendor : ''}</td>
       <td>${t.payment || ''}</td>
@@ -859,9 +867,12 @@ function purchaseRowHtml(t) {
 function purchaseEditRowHtml(t) {
   const opts = purchaseCategoriesList.map((c) => `<option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('');
   const payOpts = paymentMethodsList.map((c) => `<option value="${c}" ${c === t.payment ? 'selected' : ''}>${c}</option>`).join('');
+  const curAccount = (t.account === 'cafe' || t.account === 'youth') ? t.account : (t.source === 'cafe' ? 'cafe' : 'youth');
+  const accountOpts = `<option value="youth" ${curAccount === 'youth' ? 'selected' : ''}>청년부</option><option value="cafe" ${curAccount === 'cafe' ? 'selected' : ''}>카페</option>`;
   return `<tr data-id="${t.id}">
       <td><input type="date" class="edit-input" data-f="date" value="${t.date}"></td>
       <td>${txSourceLabel(t.source)}</td>
+      <td><select class="edit-input" data-f="account">${accountOpts}</select></td>
       <td><select class="edit-input" data-f="category">${opts}</select></td>
       <td><input type="text" class="edit-input" data-f="item" value="${esc(t.item)}"></td>
       <td><select class="edit-input" data-f="payment">${payOpts}</select></td>
@@ -919,7 +930,7 @@ function manualEditRowHtml(t) {
 }
 
 const MINI_TABLES = {
-  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 7 },
+  purchaseRecentTable: { row: purchaseRowHtml, edit: purchaseEditRowHtml, cols: 8 },
   incomeRecentTable: { row: incomeRowHtml, edit: incomeEditRowHtml, cols: 7 },
   manualRecentTable: { row: manualRowHtml, edit: manualEditRowHtml, cols: 6 }
 };
