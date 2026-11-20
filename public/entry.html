@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>구매·지출 입력 - 주섬주섬 Finance</title>
+<title>구매·지출 / 입금 입력 - 주섬주섬 Finance</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#4f46e5">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -33,6 +33,12 @@
     background: var(--accent); color: white; width: 100%;
   }
   .note { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+  .mode-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .mode-tabs button {
+    flex: 1; cursor: pointer; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    font-size: 14px; font-weight: 700; background: var(--card); color: var(--text);
+  }
+  .mode-tabs button.active { background: var(--accent); color: white; border-color: var(--accent); }
   .toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #111827; color: white;
     padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; white-space: nowrap;
@@ -41,13 +47,17 @@
 </head>
 <body>
 <header class="top">
-  <div class="title"><h1>📝 구매·지출 입력</h1></div>
+  <div class="title"><h1 id="pageTitle">📝 구매·지출 입력</h1></div>
   <div class="header-right">
     <a href="/" title="홈" style="font-size:20px;text-decoration:none;">🏠</a>
   </div>
 </header>
 <div class="wrap">
   <p class="note">로그인 없이 누구나 바로 입력할 수 있어요. 입력한 내용을 수정하거나 삭제해야 하면 관리자 페이지에서 해주세요.</p>
+  <div class="mode-tabs">
+    <button type="button" id="tabExpense" class="active">🧾 지출</button>
+    <button type="button" id="tabIncome">💰 입금</button>
+  </div>
   <form class="entry" id="entryForm">
     <div class="full">
       <label>날짜</label>
@@ -96,6 +106,40 @@
       <button class="primary" type="submit">저장</button>
     </div>
   </form>
+
+  <form class="entry" id="incomeEntryForm" hidden>
+    <div class="full">
+      <label>날짜</label>
+      <input type="date" name="date" id="incomeEntryDate" required>
+    </div>
+    <div class="full">
+      <label>카테고리</label>
+      <select name="category" id="incomeEntryCategory" required></select>
+    </div>
+    <div>
+      <label>낸 사람 / 후원자 (선택)</label>
+      <input type="text" name="payer" placeholder="예: 홍길동">
+    </div>
+    <div>
+      <label>금액 (RM)</label>
+      <input type="number" name="amount" step="0.01" min="0.01" required>
+    </div>
+    <div class="full">
+      <label>받은 방법</label>
+      <select name="channel" id="incomeEntryChannel" required></select>
+    </div>
+    <div class="full">
+      <label>입력자</label>
+      <input type="text" name="author" placeholder="이름" required>
+    </div>
+    <div class="full">
+      <label>메모 (선택)</label>
+      <input type="text" name="memo" placeholder="예: 11월 회비">
+    </div>
+    <div class="full">
+      <button class="primary" type="submit">저장</button>
+    </div>
+  </form>
 </div>
 <div class="toast" id="toast"></div>
 <script>
@@ -113,18 +157,43 @@ function toast(msg) {
 }
 
 async function loadOptions() {
-  const [catRes, payRes] = await Promise.all([
+  const [catRes, payRes, incomeCatRes, channelRes] = await Promise.all([
     fetch('/api/purchase-categories'),
-    fetch('/api/payment-methods')
+    fetch('/api/payment-methods'),
+    fetch('/api/income-categories'),
+    fetch('/api/receive-channels')
   ]);
   const cats = await catRes.json();
   const pays = await payRes.json();
+  const incomeCats = await incomeCatRes.json();
+  const channels = await channelRes.json();
   document.getElementById('entryCategory').innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join('');
   document.getElementById('entryPayment').innerHTML = pays.map((p) => `<option value="${p}">${p}</option>`).join('');
+  document.getElementById('incomeEntryCategory').innerHTML = incomeCats.map((c) => `<option value="${c}">${c}</option>`).join('');
+  document.getElementById('incomeEntryChannel').innerHTML = channels.map((c) => `<option value="${c}">${c}</option>`).join('');
 }
 
 document.getElementById('entryDate').value = todayLocalStr();
+document.getElementById('incomeEntryDate').value = todayLocalStr();
 loadOptions();
+
+// 🧾 지출 / 💰 입금 탭 전환 — 폼 두 개를 같은 페이지에 두고 보이는 것만 바꿈
+const tabExpense = document.getElementById('tabExpense');
+const tabIncome = document.getElementById('tabIncome');
+const expenseForm = document.getElementById('entryForm');
+const incomeForm = document.getElementById('incomeEntryForm');
+const pageTitle = document.getElementById('pageTitle');
+function setMode(mode) {
+  const isExpense = mode === 'expense';
+  tabExpense.classList.toggle('active', isExpense);
+  tabIncome.classList.toggle('active', !isExpense);
+  expenseForm.hidden = !isExpense;
+  incomeForm.hidden = isExpense;
+  pageTitle.textContent = isExpense ? '📝 구매·지출 입력' : '💰 입금 입력';
+  document.title = (isExpense ? '구매·지출' : '입금') + ' 입력 - 주섬주섬 Finance';
+}
+tabExpense.addEventListener('click', () => setMode('expense'));
+tabIncome.addEventListener('click', () => setMode('income'));
 
 document.getElementById('entryForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -136,6 +205,28 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
     const author = form.author.value;
     form.reset();
     document.getElementById('entryDate').value = todayLocalStr();
+    form.author.value = author;
+  } else {
+    const data = await res.json().catch(() => ({}));
+    toast('오류: ' + (data.error || '저장 실패'));
+  }
+});
+
+document.getElementById('incomeEntryForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  const res = await fetch('/api/entries/income', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    toast('저장됐어요 ✓');
+    const author = form.author.value;
+    form.reset();
+    document.getElementById('incomeEntryDate').value = todayLocalStr();
     form.author.value = author;
   } else {
     const data = await res.json().catch(() => ({}));

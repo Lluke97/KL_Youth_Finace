@@ -1069,8 +1069,10 @@ app.post('/api/entries/purchase', upload.single('receipt'), createPurchaseEntry)
 // Dedicated income entry: preset categories (회비/후원금/헌금/기타수입)
 // instead of the free-text category in the generic form above. 회비 is
 // filed under source "membership" so it still groups with the existing
-// membership-fee history; everything else is "manual".
-app.post('/api/admin/income', (req, res) => {
+// membership-fee history; everything else is "manual". Factored out like
+// createPurchaseEntry so both the admin form and the public no-login
+// quick-entry page (아래) share one implementation.
+function createIncomeEntry(req, res) {
   const { date, category, payer, amount, memo, author, channel } = req.body || {};
   const amountNum = parseFloat(amount);
   if (!date || !INCOME_CATEGORIES.includes(category) || Number.isNaN(amountNum) || amountNum <= 0 || !RECEIVE_CHANNELS.includes(channel)) {
@@ -1099,7 +1101,13 @@ app.post('/api/admin/income', (req, res) => {
   db.saveTransactions(txns);
   recordAutoSettlement(entry);
   res.status(201).json(entry);
-});
+}
+
+app.post('/api/admin/income', createIncomeEntry);
+
+// Public quick-entry — no admin login needed to add 회비/후원금 등 입금,
+// same as the purchase/expense quick-entry page above.
+app.post('/api/entries/income', createIncomeEntry);
 
 // Bulk upload: .xlsx or .csv with columns 날짜/구분/카테고리/항목/금액/메모/작성자
 // (see /api/admin/bulk-template.csv). Every row is validated independently —
