@@ -56,8 +56,6 @@
     <div id="settlementDiffNote" style="font-size:12px;margin-top:10px;"></div>
   </section>
 
-  <div class="cards" id="sourceCards"></div>
-
   <section class="block">
     <h2>월별 수입/지출</h2>
     <div style="height:220px;"><canvas id="monthlyChart"></canvas></div>
@@ -92,7 +90,6 @@ document.addEventListener('click', function () {
 
 const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금', transfer: '후원/이체', 'channel-transfer': '계좌 전환' };
 const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
 
 // Distinct, non-income/expense color palette — one hue per category so the
@@ -155,17 +152,6 @@ async function loadSummary() {
 
   document.getElementById('balanceValue').textContent = fmt(s.balance);
   lastBalance = s.balance;
-
-  const cardsEl = document.getElementById('sourceCards');
-  cardsEl.innerHTML = '';
-  Object.entries(s.bySource).forEach(([src, v]) => {
-    cardsEl.innerHTML += `
-      <div class="card">
-        <div class="label">${SOURCE_LABEL[src] || src}</div>
-        <div class="value income">+${fmt(v.income)}</div>
-        <div class="value expense">-${fmt(v.expense)}</div>
-      </div>`;
-  });
 
   const tagBody = document.querySelector('#tagTable tbody');
   tagBody.innerHTML = '';
