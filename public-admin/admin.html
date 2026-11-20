@@ -66,6 +66,7 @@
         <a href="/dashboard.html">📊 대시보드</a>
         <a href="/admin#sync">🔄 카페 동기화</a>
         <a href="/admin#transfer">🤝 카페→청년부 후원</a>
+        <a href="/admin#channel-transfer">💱 현금↔계좌 전환</a>
         <a href="/admin#purchase">🧾 구매 지출 입력</a>
         <a href="/admin#income">💸 수입 입력</a>
         <a href="/admin#settlement">💰 정산 입력</a>
@@ -80,6 +81,7 @@
 <nav class="admin-tabs" id="adminTabs">
   <a class="tab" data-section="sync" href="#sync">🔄 동기화</a>
   <a class="tab" data-section="transfer" href="#transfer">🤝 후원/이체</a>
+  <a class="tab" data-section="channel-transfer" href="#channel-transfer">💱 계좌 전환</a>
   <a class="tab" data-section="settlement" href="#settlement">💰 정산</a>
   <a class="tab" data-section="purchase" href="#purchase">🧾 구매 지출</a>
   <a class="tab" data-section="income" href="#income">💸 수입</a>
@@ -131,6 +133,53 @@
       </div>
       <div class="full">
         <button class="primary" type="submit">후원/이체 기록</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="block admin-section" id="channel-transfer">
+    <h2>💱 현금 ↔ 계좌 전환</h2>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">현금이 너무 쌓여서 은행에 입금했거나, 반대로 은행에서 현금을 뽑은 경우처럼 <b>같은 계좌 안에서 돈의 형태만 바뀐 경우</b> 여기서 기록하세요. 전체 합계(잔액)는 바뀌지 않고, 현금/터치앤고/은행 구성만 옮겨진 만큼 정확히 반영돼요. 수입·지출 보고서(카테고리별·월별)에는 실제 돈이 들어오거나 나간 게 아니라서 포함되지 않아요.</p>
+    <form class="entry" id="channelTransferForm">
+      <div>
+        <label>날짜</label>
+        <input type="date" name="date" required>
+      </div>
+      <div>
+        <label>금액 (RM)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label>어디서 (전환 전)</label>
+        <select name="from" required>
+          <option value="">선택</option>
+          <option value="현금">💵 현금</option>
+          <option value="터치앤고">📱 터치앤고</option>
+          <option value="계좌이체">🏦 은행</option>
+        </select>
+      </div>
+      <div>
+        <label>어디로 (전환 후)</label>
+        <select name="to" required>
+          <option value="">선택</option>
+          <option value="현금">💵 현금</option>
+          <option value="터치앤고">📱 터치앤고</option>
+          <option value="계좌이체">🏦 은행</option>
+        </select>
+      </div>
+      <div>
+        <label>계좌</label>
+        <select name="account">
+          <option value="youth">청년부</option>
+          <option value="cafe">카페</option>
+        </select>
+      </div>
+      <div class="full">
+        <label>메모</label>
+        <input type="text" name="memo" placeholder="예: 현금이 많이 쌓여서 은행 입금">
+      </div>
+      <div class="full">
+        <button class="primary" type="submit">전환 기록</button>
       </div>
     </form>
   </section>
@@ -385,7 +434,7 @@ document.addEventListener('click', function () {
 
 // ---- show one menu section at a time (driven by the #hash, same sections
 // the hamburger menu links to) ----
-const SECTION_IDS = ['sync', 'transfer', 'settlement', 'purchase', 'income', 'manual', 'bulk', 'all'];
+const SECTION_IDS = ['sync', 'transfer', 'channel-transfer', 'settlement', 'purchase', 'income', 'manual', 'bulk', 'all'];
 function showSection(id) {
   if (!SECTION_IDS.includes(id)) id = SECTION_IDS[0];
   SECTION_IDS.forEach((s) => {
@@ -582,7 +631,7 @@ document.getElementById('entryForm').addEventListener('submit', async (e) => {
 const SOURCE_LABEL = { 'cafe-pos': '카페 자동', manual: '직접입력', auto: '자동 반영' };
 // Labels for transaction.source (different value set from settlement.source above:
 // cafe = cafe-pos 자동 동기화, manual = 수동 입력, membership = 회비 입력)
-const TX_SOURCE_LABEL = { cafe: '☕ 카페', manual: '✏️ 수동입력', membership: '✏️ 회비', carryover: '📦 이월', transfer: '🤝 후원/이체' };
+const TX_SOURCE_LABEL = { cafe: '☕ 카페', manual: '✏️ 수동입력', membership: '✏️ 회비', carryover: '📦 이월', transfer: '🤝 후원/이체', 'channel-transfer': '💱 계좌 전환' };
 function txSourceLabel(source) { return TX_SOURCE_LABEL[source] || source; }
 const ACCOUNT_LABEL_ADMIN = { youth: '청년부', cafe: '카페' };
 // 서버의 txnAccount() 규칙과 동일 — account 필드가 없는 과거 거래는
@@ -606,6 +655,31 @@ document.getElementById('transferForm').addEventListener('submit', async (e) => 
     e.target.reset();
     setDefaultDates();
     toast('카페 → 청년부 후원/이체가 기록되었습니다');
+    if (typeof loadAll === 'function') loadAll();
+  } else {
+    const data = await res.json();
+    toast('오류: ' + data.error);
+  }
+});
+
+document.getElementById('channelTransferForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  body.amount = parseFloat(body.amount);
+  if (body.from === body.to) {
+    toast('오류: 전환 전/후가 서로 달라야 합니다');
+    return;
+  }
+  const res = await fetch('/api/admin/channel-transfer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    e.target.reset();
+    setDefaultDates();
+    toast('전환이 기록되었습니다');
     if (typeof loadAll === 'function') loadAll();
   } else {
     const data = await res.json();

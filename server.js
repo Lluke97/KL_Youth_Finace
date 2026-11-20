@@ -640,6 +640,12 @@ app.get('/api/summary', (req, res) => {
     if (!bySource[t.source]) bySource[t.source] = { income: 0, expense: 0 };
     bySource[t.source][t.type] += t.amount;
 
+    // 현금↔은행 같은 "채널 전환"은 실제 수입/지출이 아니라 같은 돈이 형태만
+    // 바꾼 것 — 태그/카테고리/월별 집계에 끼면 수입·지출이 실제보다 부풀려
+    // 보이므로 제외한다. (balance와 bySource는 그대로 — balance는 +금액/-금액
+    // 짝이라 net 0이고, bySource엔 "계좌 전환"으로 따로 보여서 투명함.)
+    if (t.source === 'channel-transfer') return;
+
     const tagKey = t.tag || 'untagged';
     if (!byTag[tagKey]) byTag[tagKey] = { income: 0, expense: 0 };
     byTag[tagKey][t.type] += t.amount;
@@ -1046,6 +1052,65 @@ app.put('/api/admin/settlements/:id', (req, res) => {
   res.json(list[idx]);
 });
 
+// 현금 ↔ 터치앤고 ↔ 은행 전환: 같은 계좌 안에서 돈의 "형태"만 바뀌는 경우
+// (예: 현금이 너무 많이 쌓여서 은행에 입금). /api/admin/transfer(카페→청년부)
+// 와 달리 계좌(account)는 그대로고 채널(channel)만 한쪽에서 다른 쪽으로
+// 옮겨진다 — 지출 한 건 + 수입 한 건을 짝지어 기록해서 전체 합계는 그대로
+// 유지하면서 현금/은행 버킷 구성만 정확히 반영되게 한다. 보고서(카테고리별
+// ·월별 집계)에는 실제 수입/지출이 아니므로 집계에서 제외된다 — /api/summary
+// 참고.
+app.post('/api/admin/channel-transfer', (req, res) => {
+  const { date, amount, from, to, memo, author, account } = req.body || {};
+  const amountNum = parseFloat(amount);
+  if (!date || Number.isNaN(amountNum) || amountNum <= 0 || !RECEIVE_CHANNELS.includes(from) || !RECEIVE_CHANNELS.includes(to) || from === to) {
+    return res.status(400).json({ error: `date, 0보다 큰 amount, 서로 다른 from/to (${RECEIVE_CHANNELS.join('|')})가 필요합니다` });
+  }
+  const acc = account === 'cafe' ? 'cafe' : 'youth';
+  const transferId = 'chxfer_' + uid();
+  const now = new Date().toISOString();
+  const label = `${from} → ${to} 전환`;
+  const outTxn = {
+    id: 'tx_' + uid(),
+    date,
+    type: 'expense',
+    source: 'channel-transfer',
+    account: acc,
+    tag: null,
+    category: '계좌 전환',
+    item: label,
+    amount: amountNum,
+    channel: channelToBucket(from),
+    memo: memo || '',
+    author: author || '',
+    transferId,
+    externalId: null,
+    createdAt: now
+  };
+  const inTxn = {
+    id: 'tx_' + uid(),
+    date,
+    type: 'income',
+    source: 'channel-transfer',
+    account: acc,
+    tag: null,
+    category: '계좌 전환',
+    item: label,
+    amount: amountNum,
+    channel: channelToBucket(to),
+    memo: memo || '',
+    author: author || '',
+    transferId,
+    externalId: null,
+    createdAt: now
+  };
+  const txns = db.getTransactions();
+  txns.push(outTxn, inTxn);
+  db.saveTransactions(txns);
+  recordAutoSettlement(outTxn);
+  recordAutoSettlement(inTxn);
+  res.status(201).json({ out: outTxn, in: inTxn });
+});
+
 // 카페 → 청년부 후원/이체: 실제로 카페 쪽 현금/계좌가 청년부 쪽으로 넘어갈
 // 때 관리자가 기록한다. 카페 계좌엔 지출, 청년부 계좌엔 수입으로 각각 한
 // 건씩 남아서 두 계좌 잔액에 모두 정확히 반영되고, "전체" 합계는 서로
@@ -1161,7 +1226,9 @@ app.get('/api/admin/export-xlsx', (req, res) => {
   ]);
 
   const purchases = txns.filter((t) => t.type === 'expense' && t.source === 'manual');
-  const income = txns.filter((t) => t.type === 'income');
+  // 채널 전환(현금↔은행 등)은 실제 수입이 아니므로 "수입" 시트에선 뺀다 —
+  // 그래도 "전체내역" 시트에는 그대로 남아 있어 추적 가능하다.
+  const income = txns.filter((t) => t.type === 'income' && t.source !== 'channel-transfer');
   const cafe = txns.filter((t) => t.source === 'cafe');
 
   const wb = XLSX.utils.book_new();
