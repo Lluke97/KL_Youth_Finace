@@ -376,30 +376,6 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 })();
 
-// "청년부 재정은 현금이 없고 다 은행이다" / "현금을 은행으로 다 옮길 걸로
-// 쳐줘" / "다 현금 말고 은행으로 잡아줘" — 청년부 계좌(account='youth')
-// 거래 중 channel이 'cash'(현금)·'tng'(터치앤고)로 잡혀 있는 건(주로
-// 수련회 회비 중 Cash로 낸 건들)을 전부 bank(은행)로 바꾼다. 표시용
-// 라벨(receiveChannel/payment)도 같이 맞춘다. 카페 계좌는 실제로 카페
-// 서랍에 현금이 있으므로 건드리지 않는다. 이미 bank인 건 다시 안
-// 건드리므로(멱등) env 게이트 없이 상시 적용.
-(function forceYouthChannelToBank() {
-  const txns = db.getTransactions();
-  let changed = 0;
-  txns.forEach((t) => {
-    if (txnAccount(t) === 'youth' && (t.channel === 'cash' || t.channel === 'tng')) {
-      t.channel = 'bank';
-      if (t.receiveChannel) t.receiveChannel = '계좌이체';
-      if (t.payment) t.payment = '카드';
-      changed += 1;
-    }
-  });
-  if (changed) {
-    db.saveTransactions(txns);
-    console.log(`[youth-budget] 청년부 계좌 거래 중 현금/TnG로 잡혀있던 ${changed}건을 은행(bank)으로 재지정했습니다.`);
-  }
-})();
-
 // 읽기 전용 진단: "청년부 실제 잔액 구성"이 비정상적으로 커 보이는 원인과,
 // 청년부 계정으로 잘못 들어가 있을 수 있는 카페 관련 수동입력 거래를
 // 찾기 위해 현재 정산/거래 데이터를 로그로만 출력한다 (아무것도 바꾸지
@@ -767,6 +743,164 @@ if (process.env.SEED_YOUTH_LEDGER_20261120 === '1') {
     db.saveTransactions(__txns2.concat(allNew2));
     console.log('[youth-budget] applied SEED_YOUTH_LEDGER_20261120 migration:', allNew2.length, 'transactions added',
       `(회비 ${feeTxns2.length} / 후원금 ${sponsorTxns2.length} / 지출 ${expenseTxns2.length})`);
+  }
+}
+
+// "청년부 재정은 현금이 없고 다 은행이다" / "현금을 은행으로 다 옮길 걸로
+// 쳐줘" / "다 현금 말고 은행으로 잡아줘" — 청년부 계좌(account='youth')
+// 거래 중 channel이 'cash'(현금)·'tng'(터치앤고)로 잡혀 있는 건(주로
+// 수련회 회비 중 Cash로 낸 건들)을 전부 bank(은행)로 바꾼다. 표시용
+// 라벨(receiveChannel/payment)도 같이 맞춘다. 카페 계좌는 실제로 카페
+// 서랍에 현금이 있으므로 건드리지 않는다. 위의 수련회/회비장부 시드보다
+// 반드시 뒤에 와야 한다(새로 시드되는 Cash 건까지 다 잡아야 하므로).
+// 이미 bank인 건 다시 안 건드리므로(멱등) env 게이트 없이 상시 적용.
+(function forceYouthChannelToBank() {
+  const txns = db.getTransactions();
+  let changed = 0;
+  txns.forEach((t) => {
+    if (txnAccount(t) === 'youth' && (t.channel === 'cash' || t.channel === 'tng')) {
+      t.channel = 'bank';
+      if (t.receiveChannel) t.receiveChannel = '계좌이체';
+      if (t.payment) t.payment = '카드';
+      changed += 1;
+    }
+  });
+  if (changed) {
+    db.saveTransactions(txns);
+    console.log(`[youth-budget] 청년부 계좌 거래 중 현금/TnG로 잡혀있던 ${changed}건을 은행(bank)으로 재지정했습니다.`);
+  }
+})();
+
+// "청년부는 전체가 계좌에 있어 / 내가 그때그때 계좌로 넣어" — "실제 잔액
+// 구성"에 남아있던 현금/터치앤고 분량은, 과거(계좌분리 이전) 기준점
+// 정산이 물려준 숫자일 뿐 실제로는 임창현님이 그때그때 다 은행에 입금해둔
+// 돈이라는 확인. 총액(RM)은 그대로 두고 현금/TnG를 전부 계좌로 합쳐
+// 새 기준점을 오늘 날짜로 다시 찍는다 — 총액을 추측/변경하지 않고,
+// 지금 이 순간의 실제 잔액 구성 계산값을 그대로 가져와 cash/tng만
+// bank로 옮겨 담는다. 멱등 — 고정 id(settle_youth_allbank_20261120)가
+// 이미 있으면 다시 안 만듦.
+if (process.env.RESET_YOUTH_BASELINE_TO_BANK_20261120 === '1') {
+  const settlements3 = db.getSettlements();
+  if (!settlements3.some((s) => s.id === 'settle_youth_allbank_20261120')) {
+    const b = computeAccountBreakdown('youth');
+    const now3 = new Date().toISOString();
+    settlements3.push({
+      id: 'settle_youth_allbank_20261120',
+      date: now3.slice(0, 10),
+      account: 'youth',
+      cash: 0,
+      tng: 0,
+      bank: b.current.total,
+      total: b.current.total,
+      source: 'manual',
+      memo: `청년부는 현금 없이 전부 은행 — 실제 잔액 구성의 현금(${b.current.cash})/터치앤고(${b.current.tng})를 계좌로 합산해 새 기준점으로 기록 (총액 ${b.current.total}은 그대로 유지)`,
+      createdAt: now3
+    });
+    db.saveSettlements(settlements3);
+    console.log('[youth-budget] applied RESET_YOUTH_BASELINE_TO_BANK_20261120:', JSON.stringify(b.current), '-> cash:0, tng:0, bank:' + b.current.total);
+  }
+}
+
+// 읽기 전용 전체 오류 검증: 이번 세션에 적용한 여러 마이그레이션(카페 재태깅,
+// source=cafe 계좌 강제, 회비 장부 시드, 은행 채널 통일) 이후 데이터 전체가
+// 일관적인지 한 번에 점검한다. 아무것도 바꾸지 않음.
+// FULL_VALIDATION_20261120=1일 때만 실행.
+if (process.env.FULL_VALIDATION_20261120 === '1') {
+  const txns = db.getTransactions();
+  const settlements = db.getSettlements();
+  const problems = [];
+
+  // 1) id 중복
+  const idCounts = {};
+  txns.forEach((t) => { idCounts[t.id] = (idCounts[t.id] || 0) + 1; });
+  const dupIds = Object.entries(idCounts).filter(([, c]) => c > 1);
+  if (dupIds.length) problems.push(`거래 id 중복 ${dupIds.length}건: ${dupIds.slice(0, 5).map(([id]) => id).join(', ')}`);
+  else console.log('[check] 거래 id 중복: 없음 (전체 ' + txns.length + '건)');
+
+  // 2) externalId 중복 (null/빈값 제외)
+  const extCounts = {};
+  txns.forEach((t) => { if (t.externalId) extCounts[t.externalId] = (extCounts[t.externalId] || 0) + 1; });
+  const dupExt = Object.entries(extCounts).filter(([, c]) => c > 1);
+  if (dupExt.length) problems.push(`externalId 중복 ${dupExt.length}건: ${dupExt.slice(0, 5).map(([id]) => id).join(', ')}`);
+  else console.log('[check] externalId 중복: 없음');
+
+  // 3) 금액이 0 이하이거나 숫자가 아닌 거래
+  const badAmount = txns.filter((t) => typeof t.amount !== 'number' || !(t.amount > 0) || Number.isNaN(t.amount));
+  if (badAmount.length) problems.push(`amount가 0 이하/비정상인 거래 ${badAmount.length}건: ${badAmount.slice(0, 5).map((t) => t.id).join(', ')}`);
+  else console.log('[check] 금액(amount) 0 이하/비정상: 없음');
+
+  // 4) type이 income/expense가 아닌 거래
+  const badType = txns.filter((t) => t.type !== 'income' && t.type !== 'expense');
+  if (badType.length) problems.push(`type이 income/expense가 아닌 거래 ${badType.length}건: ${badType.slice(0, 5).map((t) => t.id + '(' + t.type + ')').join(', ')}`);
+  else console.log('[check] type(income/expense) 이상: 없음');
+
+  // 5) 날짜 형식(YYYY-MM-DD) 이상 또는 오늘(2026-11-20) 이후 미래 날짜
+  const TODAY = '2026-11-20';
+  const badDate = txns.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t.date || ''));
+  const futureDate = txns.filter((t) => /^\d{4}-\d{2}-\d{2}/.test(t.date || '') && t.date > TODAY);
+  if (badDate.length) problems.push(`날짜 형식 이상 ${badDate.length}건: ${badDate.slice(0, 5).map((t) => t.id).join(', ')}`);
+  else console.log('[check] 날짜 형식 이상: 없음');
+  if (futureDate.length) problems.push(`오늘(${TODAY}) 이후 미래 날짜 거래 ${futureDate.length}건: ${futureDate.slice(0, 5).map((t) => `${t.id}(${t.date})`).join(', ')}`);
+  else console.log('[check] 미래 날짜 거래: 없음');
+
+  // 6) 카테고리가 정해진 목록(PURCHASE_CATEGORIES/INCOME_CATEGORIES) 밖인 거래
+  // — source=cafe(cafe-pos 동기화)는 메뉴명을 그대로 카테고리로 쓰고(Ice
+  // Coffee, Cookie 등), source=carryover(집사님 이월 잔액 1건)도 별도
+  // "이월금" 성격이라 둘 다 이 체크 대상에서 제외한다.
+  const badCategory = txns.filter((t) => {
+    if (t.source === 'cafe' || t.source === 'carryover') return false;
+    const list = t.type === 'income' ? INCOME_CATEGORIES : PURCHASE_CATEGORIES;
+    return t.category && !list.includes(t.category);
+  });
+  if (badCategory.length) problems.push(`정의되지 않은 카테고리 ${badCategory.length}건: ${badCategory.slice(0, 5).map((t) => `${t.id}(${t.category})`).join(', ')}`);
+  else console.log('[check] 카테고리(목록 밖): 없음');
+
+  // 7) tag가 정의된 값 밖인 거래
+  const VALID_TAGS = ['', 'cafe-ops', 'youth-general', 'needs-review', null, undefined];
+  const badTag = txns.filter((t) => !VALID_TAGS.includes(t.tag));
+  if (badTag.length) problems.push(`정의되지 않은 tag ${badTag.length}건: ${badTag.slice(0, 5).map((t) => `${t.id}(${t.tag})`).join(', ')}`);
+  else console.log('[check] tag(목록 밖): 없음');
+
+  // 8) needs-review(확인 필요) 태그가 남아있는 거래
+  const needsReview = txns.filter((t) => t.tag === 'needs-review');
+  if (needsReview.length) console.log(`[check] ⚠️ tag="확인필요"로 남아있는 거래 ${needsReview.length}건 (오류는 아니지만 수동 확인 필요)`);
+  else console.log('[check] needs-review 거래: 없음');
+
+  // 9) channel이 없어 실제 잔액 구성(현금/TnG/은행)에서 빠지는 거래
+  const noChannel = txns.filter((t) => t.source !== 'channel-transfer' && !t.channel);
+  console.log(`[check] channel 없는 거래(잔액 구성에서 제외됨): ${noChannel.length}건` + (noChannel.length ? ' — ' + noChannel.slice(0, 5).map((t) => `${t.id}(${t.date}/${t.category})`).join(', ') : ''));
+
+  // 10) 청년부 계좌인데 channel이 은행(bank)이 아닌 거래 (이번 마이그레이션이 제대로 먹혔는지)
+  const youthNotBank = txns.filter((t) => txnAccount(t) === 'youth' && t.channel && t.channel !== 'bank');
+  if (youthNotBank.length) problems.push(`청년부 계좌인데 bank가 아닌 거래 ${youthNotBank.length}건: ${youthNotBank.slice(0, 5).map((t) => `${t.id}(${t.channel})`).join(', ')}`);
+  else console.log('[check] 청년부 계좌 중 bank 아닌 거래: 없음 (현금/TnG 통일 마이그레이션 정상 적용)');
+
+  // 11) 카페 소스인데 계좌/태그가 여전히 안 맞는 거래 (강제 마이그레이션 검증)
+  const cafeSrcBad = txns.filter((t) => t.source === 'cafe' && (t.account !== 'cafe' || t.tag !== 'cafe-ops'));
+  if (cafeSrcBad.length) problems.push(`source=cafe인데 account/tag 불일치 ${cafeSrcBad.length}건: ${cafeSrcBad.slice(0, 5).map((t) => `${t.id}(${t.account}/${t.tag})`).join(', ')}`);
+  else console.log('[check] source=cafe 계좌/태그 강제 적용: 정상');
+
+  // 12) 정산(settlement) id 중복 및 account 미해석
+  const settleIdCounts = {};
+  settlements.forEach((s) => { settleIdCounts[s.id] = (settleIdCounts[s.id] || 0) + 1; });
+  const dupSettle = Object.entries(settleIdCounts).filter(([, c]) => c > 1);
+  if (dupSettle.length) problems.push(`정산 id 중복 ${dupSettle.length}건: ${dupSettle.map(([id]) => id).join(', ')}`);
+  else console.log('[check] 정산(settlement) id 중복: 없음 (전체 ' + settlements.length + '건)');
+
+  // 13) 전체 합계 및 계좌별 breakdown 눈으로 확인용 출력
+  const youthB = computeAccountBreakdown('youth');
+  const cafeB = computeAccountBreakdown('cafe');
+  console.log('[check] 청년부 실제 잔액 구성:', JSON.stringify(youthB.current));
+  console.log('[check] 카페 실제 잔액 구성:', JSON.stringify(cafeB.current));
+  const grandBalance = txns.reduce((sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount), 0);
+  console.log('[check] 전체 거래 장부상 순합계(모든 소스, 이체 포함 net 0):', grandBalance);
+
+  console.log('[check] ===== 요약 =====');
+  if (problems.length === 0) {
+    console.log('[check] ✅ 문제 없음 — 위 12개 항목 전부 통과');
+  } else {
+    console.log(`[check] ❌ 문제 ${problems.length}건 발견:`);
+    problems.forEach((p) => console.log('[check]   - ' + p));
   }
 }
 
