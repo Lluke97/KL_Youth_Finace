@@ -135,6 +135,15 @@
         <button class="primary" type="submit">후원/이체 기록</button>
       </div>
     </form>
+    <div class="recent-wrap">
+      <h3>최근 후원/이체 (최근 10건)</h3>
+      <div class="mini-table-wrap">
+        <table id="transferRecentTable">
+          <thead><tr><th>날짜</th><th class="amount">금액</th><th>메모</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section class="block admin-section" id="channel-transfer">
@@ -182,6 +191,15 @@
         <button class="primary" type="submit">전환 기록</button>
       </div>
     </form>
+    <div class="recent-wrap">
+      <h3>최근 계좌 전환 (최근 10건)</h3>
+      <div class="mini-table-wrap">
+        <table id="channelTransferRecentTable">
+          <thead><tr><th>날짜</th><th>계좌</th><th>전환</th><th class="amount">금액</th><th>메모</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section class="block admin-section" id="settlement">
@@ -1089,6 +1107,51 @@ function renderRecentLists() {
       ? rows.map(cfg.row).join('')
       : `<tr><td colspan="${cfg.cols}" class="mini-empty">아직 입력된 내역이 없습니다</td></tr>`;
     bindMiniTableEvents(tableId);
+  });
+
+  renderTransferPairTable('transferRecentTable', 'transfer', 4, (t) => `
+    <tr data-id="${t.id}">
+      <td>${t.date}</td>
+      <td class="amount">${fmt(t.amount)}</td>
+      <td>${esc(t.memo || '')}</td>
+      <td class="row-actions"><button class="ghost btn-small" data-pairdel="${t.id}">삭제</button></td>
+    </tr>`);
+
+  const CHANNEL_BUCKET_LABEL = { cash: '💵 현금', tng: '📱 터치앤고', bank: '🏦 은행' };
+  renderTransferPairTable('channelTransferRecentTable', 'channel-transfer', 6, (t, sibling) => `
+    <tr data-id="${t.id}">
+      <td>${t.date}</td>
+      <td>${txAccountLabel(t)}</td>
+      <td>${CHANNEL_BUCKET_LABEL[t.channel] || t.channel} → ${sibling ? (CHANNEL_BUCKET_LABEL[sibling.channel] || sibling.channel) : ''}</td>
+      <td class="amount">${fmt(t.amount)}</td>
+      <td>${esc(t.memo || '')}</td>
+      <td class="row-actions"><button class="ghost btn-small" data-pairdel="${t.id}">삭제</button></td>
+    </tr>`);
+}
+
+// transfer/channel-transfer 둘 다 거래 한 쌍(expense+income, transferId로
+// 묶임)을 한 번의 폼 제출로 남긴다 — 목록엔 지출 쪽(outTxn) 한 줄만 대표로
+// 보여주고, 삭제 버튼은 짝까지 같이 지우는 기존 DELETE API를 그대로 쓴다.
+function renderTransferPairTable(tableId, source, cols, rowHtml) {
+  const body = document.querySelector(`#${tableId} tbody`);
+  if (!body) return;
+  const byCreatedDesc = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '');
+  const outRows = txCache
+    .filter((t) => t.source === source && t.type === 'expense')
+    .sort(byCreatedDesc)
+    .slice(0, MINI_LIMIT);
+  body.innerHTML = outRows.length
+    ? outRows.map((t) => {
+        const sibling = txCache.find((x) => x.transferId === t.transferId && x.id !== t.id);
+        return rowHtml(t, sibling);
+      }).join('')
+    : `<tr><td colspan="${cols}" class="mini-empty">아직 입력된 내역이 없습니다</td></tr>`;
+  body.querySelectorAll('button[data-pairdel]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('삭제할까요? (짝 거래도 함께 삭제됩니다)')) return;
+      await fetch('/api/admin/transactions/' + b.getAttribute('data-pairdel'), { method: 'DELETE' });
+      loadAll();
+    });
   });
 }
 
