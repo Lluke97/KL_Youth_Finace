@@ -90,7 +90,7 @@ document.addEventListener('click', function () {
   document.getElementById('navMenu').hidden = true;
 });
 
-const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(Math.round(n)).toLocaleString();
+const fmt = (n) => (n < 0 ? '-' : '') + 'RM' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const SOURCE_LABEL = { cafe: '카페', membership: '회비', manual: '수동입력', carryover: '이월금', transfer: '후원/이체', 'channel-transfer': '계좌 전환' };
 const TAG_LABEL = { 'cafe-ops': '카페 운영', 'youth-general': '청년부 일반지출', 'needs-review': '⚠️ 분류 확인필요', untagged: '미분류' };
