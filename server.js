@@ -520,6 +520,23 @@ if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
   }
 }
 
+// 테스트로 만든 RM100 현금→계좌이체 전환(계좌 전환 탭 테스트) 삭제.
+// /api/admin/transactions/:id DELETE와 동일한 로직 — 짝 거래 + 관련
+// auto 정산 스냅샷도 같이 지운다. 멱등 — 해당 transferId가 없으면 통과.
+if (process.env.DELETE_TEST_CHANNEL_TRANSFER_20261121 === '1') {
+  const txns8 = db.getTransactions();
+  const idsToRemove8 = new Set(
+    txns8.filter((t) => t.transferId === 'chxfer_mwp739k789ihdk').map((t) => t.id)
+  );
+  if (idsToRemove8.size) {
+    db.saveTransactions(txns8.filter((t) => !idsToRemove8.has(t.id)));
+    const settlements8 = db.getSettlements();
+    const kept8 = settlements8.filter((s) => !idsToRemove8.has(s.txnId));
+    if (kept8.length !== settlements8.length) db.saveSettlements(kept8);
+    console.log('[youth-budget] applied DELETE_TEST_CHANNEL_TRANSFER_20261121: ' + idsToRemove8.size + '건 삭제(테스트 RM100 계좌 전환)');
+  }
+}
+
 // transfer/channel-transfer 쌍이 날짜·계좌·금액까지 똑같이 겹치는 게
 // 있는지(실수로 두 번 기록됐는지) 확인한다. 아무것도 바꾸지 않음.
 // DIAG_CHECK_TRANSFER_DUPES_20261121=1일 때만.
