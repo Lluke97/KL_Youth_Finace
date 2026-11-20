@@ -188,13 +188,19 @@
 
   <section class="block admin-section" id="settlement">
     <h2>실제 잔액 기준점 다시 맞추기 (현금 / 터치앤고 / 은행)</h2>
-    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">대시보드의 "실제 잔액 구성"은 평소엔 자동으로 계산돼요. 가끔 현금/계좌를 직접 세어봤는데 숫자가 안 맞을 때만, 여기서 그 시점 기준으로 다시 맞춰주세요. 이 폼은 <b>청년부 계좌</b> 기준이에요 — 카페 쪽은 카페 관리자 페이지의 "정산 전송" 버튼을 누르면 카페 계좌에 자동으로 들어오고, 그동안의 주문/지출 내역도 같이 동기화돼요.</p>
+    <p style="font-size:12px;color:var(--muted);margin-top:-4px;">대시보드의 "실제 잔액 구성"은 평소엔 자동으로 계산돼요. 가끔 현금/계좌를 직접 세어봤는데 숫자가 안 맞을 때만, 여기서 그 시점 기준으로 다시 맞춰주세요. 카페 쪽은 보통 카페 관리자 페이지의 "정산 전송" 버튼을 누르면 자동으로 들어오고 그동안의 주문/지출 내역도 같이 동기화되지만, 필요하면 아래에서 계좌를 카페로 선택해 직접 기록할 수도 있어요.</p>
     <form class="entry" id="settlementForm">
       <div>
         <label>날짜</label>
         <input type="date" name="date" required>
       </div>
-      <div></div>
+      <div>
+        <label>계좌</label>
+        <select name="account">
+          <option value="youth" selected>청년부</option>
+          <option value="cafe">카페</option>
+        </select>
+      </div>
       <div>
         <label>💵 현금 (RM)</label>
         <input type="number" name="cash" step="0.01" required>

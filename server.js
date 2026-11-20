@@ -838,6 +838,32 @@ if (process.env.RESET_YOUTH_BASELINE_TO_LEDGER_20261120 === '1') {
   }
 }
 
+// "정크 파일 지워줘" — 이제 더 이상 기준점으로 쓰이지 않는, 과거 오류의
+// 흔적인 청년부 정산 4건을 정리한다: (1) settle_retreat1_20261120 —
+// 수련회 시드 당시 잘못된 기준점을 그대로 물려받아 찍혔던 RM19,553짜리
+// 정산, (2) settle_youth_allbank_20261120 — RESET_YOUTH_BASELINE_TO_BANK
+// 단계에서 찍었던 RM19,820짜리 정산(장부기준 수정으로 완전히 대체됨),
+// (3)(4) 2026-11-14 계좌분리 이전, account 미지정으로 청년부에 잘못
+// 귀속됐던 원조 정산 2건(카페+청년부가 합쳐져 있던 당시 금액). 지금의
+// 유일한 기준점인 settle_youth_ledgerfix_20261120(오늘자, 장부기준)은
+// 그대로 둔다. 카페 쪽 정산은 전혀 건드리지 않음. 멱등 — 이미 지워졌으면
+// 아무것도 안 함.
+if (process.env.CLEANUP_JUNK_YOUTH_SETTLEMENTS_20261120 === '1') {
+  const settlements5 = db.getSettlements();
+  const toDelete = settlements5.filter((s) =>
+    s.id === 'settle_retreat1_20261120' ||
+    s.id === 'settle_youth_allbank_20261120' ||
+    (settlementAccount(s) === 'youth' && s.date === '2026-11-14')
+  );
+  if (toDelete.length) {
+    const keepIds = new Set(settlements5.map((s) => s.id).filter((id) => !toDelete.some((d) => d.id === id)));
+    const remaining = settlements5.filter((s) => keepIds.has(s.id));
+    db.saveSettlements(remaining);
+    console.log('[youth-budget] applied CLEANUP_JUNK_YOUTH_SETTLEMENTS_20261120: 삭제된 정크 정산',
+      toDelete.length + '건:', toDelete.map((s) => `${s.id}(${s.date}/RM${s.total})`).join(', '));
+  }
+}
+
 // 변경이력(히스토리) 시드: 2026-11-20 세션에 코드 배포로 일괄 반영된
 // 이관/수정 작업들을 관리자 "변경이력" 화면에서 볼 수 있도록 기록한다.
 // 멱등 — id가 이미 있으면 다시 안 넣음.
@@ -852,7 +878,8 @@ if (process.env.SEED_CHANGELOG_20261120 === '1') {
     ['cl_20261120_5', '청년부 계좌 현금/TnG → 은행 통일', '"청년부 재정은 현금 없이 다 은행" 확인에 따라 청년부 계좌 거래의 channel이 현금/터치앤고로 남아있던 건(수련회 회비 중 Cash 4건)을 전부 은행으로 재지정하는 상시 규칙 추가.'],
     ['cl_20261120_6', '청년부 실제잔액 기준점 재설정(현금/TnG→계좌)', '"실제 잔액 구성"에 남아있던 현금(1,529)/터치앤고(1,000)를 계좌로 합산한 새 기준점 정산을 오늘 날짜로 기록. 총액(RM19,820)은 변경 없이 유지, 구성만 전부 계좌로 재분류. 카페 쪽 정산은 그대로 둠.'],
     ['cl_20261120_7', '전체 오류 검증 통과', '거래 id/externalId 중복, 금액·타입·날짜·카테고리·태그 이상, 계좌별 채널 강제 적용, 정산 중복 등 12개 항목 전체 점검 — 문제 없음 확인.'],
-    ['cl_20261120_8', '청년부 실제잔액 ↔ 장부잔액 불일치 근본 수정', '"청년부 잔액(장부 기준)"과 "실제 잔액 구성"이 어긋나던 근본 원인(2026-11-14 계좌분리 이전 정산 2건이 account 미지정으로 청년부에 잘못 귀속)을 찾아, 장부 합계를 그대로 새 기준점(전부 계좌)으로 재설정 — 이제 두 숫자가 항상 일치함. 카페 쪽 정산은 그대로 둠.']
+    ['cl_20261120_8', '청년부 실제잔액 ↔ 장부잔액 불일치 근본 수정', '"청년부 잔액(장부 기준)"과 "실제 잔액 구성"이 어긋나던 근본 원인(2026-11-14 계좌분리 이전 정산 2건이 account 미지정으로 청년부에 잘못 귀속)을 찾아, 장부 합계를 그대로 새 기준점(전부 계좌)으로 재설정 — 이제 두 숫자가 항상 일치함. 카페 쪽 정산은 그대로 둠.'],
+    ['cl_20261120_9', '정크 정산 4건 삭제 + 정산 폼에 계좌 선택 추가', '더 이상 기준점으로 쓰이지 않는 과거 오류 정산 4건(RM19,553/RM19,820/2026-11-14 2건)을 정리. "실제 잔액 기준점 다시 맞추기" 폼에 계좌(청년부/카페) 선택 드롭다운 추가 — 지금까지는 청년부 고정이었음.']
   ];
   let added = 0;
   CHANGELOG_ENTRIES.forEach(([id, title, detail]) => {
