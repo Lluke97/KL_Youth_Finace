@@ -354,6 +354,125 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 })();
 
+// One-time seed: 2026년 4/30~5/2 "1차 수련회" 재정 내역 (별도로 관리되던
+// 엑셀 파일을 Finance로 이전). 회비/후원은 사람별로 각 건씩, 구매 내역은
+// 88건을 하나로 뭉쳐서 "행사비 - 1차 수련회"로 반영한다 ("ⓘ 리더단 회의비"
+// 7건/RM348은 엑셀에도 "별도항목/후원 포함 x"로 표시돼 있어 수련회 예산에서
+// 제외). 멱등 — externalId가 'retreat1_'로 시작하는 거래가 이미 있으면 다시
+// 넣지 않으므로 재배포/재시작에도 안전.
+if (process.env.SEED_RETREAT1_20261120 === '1') {
+  const __txns = db.getTransactions();
+  if (!__txns.some((t) => t.externalId && t.externalId.startsWith('retreat1_'))) {
+    const now = new Date().toISOString();
+    const mkIncome = (externalId, date, category, payer, amount, receiveChannel, memo) => ({
+      id: 'tx_' + uid(),
+      date,
+      type: 'income',
+      source: category === '회비' ? 'membership' : 'manual',
+      account: 'youth',
+      tag: 'youth-general',
+      category,
+      item: `${category} - ${payer}`,
+      payer,
+      receiveChannel,
+      channel: channelToBucket(receiveChannel),
+      amount,
+      memo: memo || '',
+      author: '임창현',
+      externalId,
+      createdAt: now
+    });
+    // 회비 (20명 중 박해령 1명은 100 납부 후 전액 환불되어 순액 0 — 반영 생략)
+    const FEE_ROWS = [
+      ['2026-04-08', '황나엘', 150, 'QR'],
+      ['2026-04-11', '오찬영', 100, 'QR', '1박2일'],
+      ['2026-04-13', '강은수', 125, 'QR'],
+      ['2026-04-16', '한윤서', 125, 'QR'],
+      ['2026-04-18', '윤수빈', 125, 'QR'],
+      ['2026-04-18', '전용준 집사님', 125, 'QR'],
+      ['2026-04-18', '홍서희', 125, 'QR'],
+      ['2026-04-18', '전소윤', 125, 'Cash'],
+      ['2026-04-18', '심민석', 125, 'Cash'],
+      ['2026-04-18', '원가온', 125, 'Cash'],
+      ['2026-04-19', '임창현', 150, 'QR'],
+      ['2026-04-19', '김정음', 150, 'QR'],
+      ['2026-04-19', '김우제', 150, 'Cash'],
+      ['2026-04-20', '김애스더', 100, 'QR', '1박2일'],
+      ['2026-04-22', '김보민', 100, 'QR', '1박2일'],
+      ['2026-04-22', '김효찬', 150, 'QR'],
+      ['2026-04-26', '최원준', 150, 'QR'],
+      ['2026-04-27', '서연우', 150, 'QR'],
+      ['2026-04-28', '박규리', 150, 'QR']
+    ];
+    const feeTxns = FEE_ROWS.map((row, i) => {
+      const [date, payer, amount, method, memo] = row;
+      return mkIncome(`retreat1_fee_${i + 1}`, date, '회비', payer, amount, method === 'QR' ? '계좌이체' : '현금', memo);
+    });
+
+    // 후원 (날짜가 엑셀에 없어 수련회 기간 첫날 날짜로, 결제수단도 명시가
+    // 없어 계좌이체로 가정 — 실제와 다르면 나중에 수정 가능)
+    const SPONSOR_ROWS = [
+      ['김태준', 500],
+      ['바자회', 650, '여전도회'],
+      ['지경섭 집사님', 150],
+      ['고수영 목사님', 1000],
+      ['서연우 자매 어머니', 800, '금액 확인 필요(엑셀 원본 메모)'],
+      ['임창현 친구', 150],
+      ['정진석 집사님', 200],
+      ['엄철규 장로님', 500],
+      ['이현택 장로님', 300],
+      ['최민혁 장로님', 500],
+      ['류은영 권사님', 300]
+    ];
+    const sponsorTxns = SPONSOR_ROWS.map((row, i) => {
+      const [payer, amount, memo] = row;
+      return mkIncome(`retreat1_sponsor_${i + 1}`, '2026-04-30', '후원금', payer, amount, '계좌이체', memo);
+    });
+    const churchTxn = mkIncome('retreat1_church', '2026-04-30', '후원금', '교회(지원금)', 2000, '계좌이체', '교회 지원금');
+
+    // 구매 내역 88건을 하나로 뭉침 (리더단 회의비 7건/RM348은 제외)
+    const expenseTxn = {
+      id: 'tx_' + uid(),
+      date: '2026-04-30',
+      type: 'expense',
+      source: 'manual',
+      account: 'youth',
+      tag: 'youth-general',
+      category: '행사비',
+      item: '1차 수련회',
+      vendor: '',
+      payment: '카드',
+      channel: channelToBucket('계좌이체'),
+      amount: 6992.82,
+      memo: '1차 수련회(4/30~5/2) 구매 내역 88건 합산 (숙박/식비/액티비티/조모임 지원금 등). "리더단 회의비" 7건(RM348)은 엑셀 원본에도 별도항목/후원 포함 제외로 표시되어 제외함.',
+      author: '임창현',
+      receiptUrl: null,
+      externalId: 'retreat1_expense',
+      createdAt: now
+    };
+
+    const allNew = [...feeTxns, ...sponsorTxns, churchTxn, expenseTxn];
+    db.saveTransactions(__txns.concat(allNew));
+
+    const b = computeAccountBreakdown('youth');
+    const settlements = db.getSettlements();
+    settlements.push({
+      id: 'settle_retreat1_20261120',
+      date: '2026-04-30',
+      account: 'youth',
+      cash: b.current.cash,
+      tng: b.current.tng,
+      bank: b.current.bank,
+      total: b.current.total,
+      source: 'manual',
+      memo: '1차 수련회 재정 반영 (회비 19건/후원 11건+교회지원금/구매내역 합산 1건)',
+      createdAt: now
+    });
+    db.saveSettlements(settlements);
+    console.log('[youth-budget] applied SEED_RETREAT1_20261120 migration:', allNew.length, 'transactions added');
+  }
+}
+
 // ---------------- Site-wide passcode gate (sensitive financial data) ----------------
 app.use(maybeRequireSiteAccess);
 
