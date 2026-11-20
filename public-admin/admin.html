@@ -418,6 +418,7 @@
         <option value="cafe-ops">카페 운영</option>
         <option value="youth-general">청년부 일반지출</option>
         <option value="needs-review">⚠️ 확인필요</option>
+        <option value="__untagged__">미분류</option>
       </select>
     </div>
     <div class="table-scroll">
@@ -874,7 +875,9 @@ function txEditRowHtml(t) {
 
 function renderTxTable() {
   const tag = document.getElementById('fTag').value;
-  const rows = tag ? txCache.filter((t) => (t.tag || '') === tag) : txCache;
+  const rows = tag === '__untagged__'
+    ? txCache.filter((t) => !t.tag)
+    : (tag ? txCache.filter((t) => (t.tag || '') === tag) : txCache);
   const body = document.querySelector('#allTable tbody');
   body.innerHTML = rows.map(txRowHtml).join('');
   rows.forEach((t) => {
