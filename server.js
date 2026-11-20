@@ -471,6 +471,24 @@ if (process.env.DIAG_YOUTH_LEDGER_20261120 === '1') {
   });
 }
 
+// 청년부 결산용 — account=youth 전체 거래를 날짜순으로 덤프(채널전환
+// 내부조정만 제외, 수련회시드 포함). 아무것도 바꾸지 않음.
+// DIAG_YOUTH_SETTLEMENT_LIST_20261121=1일 때만.
+if (process.env.DIAG_YOUTH_SETTLEMENT_LIST_20261121 === '1') {
+  const allTxns3 = db.getTransactions();
+  const ledger3 = allTxns3
+    .filter((t) => txnAccount(t) === 'youth' && t.source !== 'channel-transfer')
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
+  let inc = 0, exp = 0;
+  console.log('[diag2] ===== account=youth 결산용 전체 거래 ' + ledger3.length + '건 (날짜순) =====');
+  ledger3.forEach((t) => {
+    if (t.type === 'income') inc += t.amount; else exp += t.amount;
+    console.log(`[diag2]   ${t.date} | ${t.type} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | tag=${t.tag || ''}`);
+  });
+  console.log(`[diag2] ===== 합계: 수입 ${inc} / 지출 ${exp} / 순액 ${inc - exp} =====`);
+}
+
 // 집사님이 정리해서 넘겨준 과거 카페 지출입금("집사님(정리본)") 53건이
 // tag=youth-general("청년부 일반지출")로 들어가 있던 걸 cafe-ops("카페
 // 운영")로 바꾼다. 내용은 실제로 청년부를 위해 쓴 카페 돈(식사 지원 등)이
