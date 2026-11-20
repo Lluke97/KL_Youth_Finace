@@ -354,6 +354,28 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 })();
 
+// "소스가 카페면 카페 제정이야" — cafe-pos에서 동기화된(source==='cafe')
+// 거래는 예외 없이 카페 계좌(account='cafe') · 카페 운영(tag='cafe-ops')
+// 이어야 한다. 실제 카페→청년부 이체는 별도 source('transfer')로 기록되므로
+// (/api/admin/transfer 참고), source='cafe'인데 account가 'youth'로 덮어써진
+// 건은 전부 과거의 수동 오분류다. 이미 올바른 건은 다시 건드리지 않으므로
+// (멱등) 별도 env 게이트 없이 매 배포/재시작마다 돌아도 안전.
+(function forceCafeSourceToCafeAccount() {
+  const txns = db.getTransactions();
+  let accountChanged = 0;
+  let tagChanged = 0;
+  txns.forEach((t) => {
+    if (t.source === 'cafe') {
+      if (t.account !== 'cafe') { t.account = 'cafe'; accountChanged += 1; }
+      if (t.tag !== 'cafe-ops') { t.tag = 'cafe-ops'; tagChanged += 1; }
+    }
+  });
+  if (accountChanged || tagChanged) {
+    db.saveTransactions(txns);
+    console.log(`[youth-budget] source=cafe 거래 중 계좌 재지정 ${accountChanged}건, 태그 재지정(→카페 운영) ${tagChanged}건 완료.`);
+  }
+})();
+
 // 읽기 전용 진단: "청년부 실제 잔액 구성"이 비정상적으로 커 보이는 원인과,
 // 청년부 계정으로 잘못 들어가 있을 수 있는 카페 관련 수동입력 거래를
 // 찾기 위해 현재 정산/거래 데이터를 로그로만 출력한다 (아무것도 바꾸지
