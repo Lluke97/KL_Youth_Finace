@@ -1038,9 +1038,12 @@ if (process.env.FULL_VALIDATION_20261120 === '1') {
   // 6) 카테고리가 정해진 목록(PURCHASE_CATEGORIES/INCOME_CATEGORIES) 밖인 거래
   // — source=cafe(cafe-pos 동기화)는 메뉴명을 그대로 카테고리로 쓰고(Ice
   // Coffee, Cookie 등), source=carryover(집사님 이월 잔액 1건)도 별도
-  // "이월금" 성격이라 둘 다 이 체크 대상에서 제외한다.
+  // "이월금" 성격이라 둘 다 이 체크 대상에서 제외한다. source=transfer(카페
+  // ↔청년부 후원/이체)와 source=channel-transfer(계좌 간 현금/은행 전환)도
+  // 각각 고정된 카테고리('청년부 후원'/'카페 후원금', '계좌 전환')를 쓰는
+  // 전용 기능이라 이 목록 체크 대상이 아니다.
   const badCategory = txns.filter((t) => {
-    if (t.source === 'cafe' || t.source === 'carryover') return false;
+    if (t.source === 'cafe' || t.source === 'carryover' || t.source === 'transfer' || t.source === 'channel-transfer') return false;
     const list = t.type === 'income' ? INCOME_CATEGORIES : PURCHASE_CATEGORIES;
     return t.category && !list.includes(t.category);
   });
