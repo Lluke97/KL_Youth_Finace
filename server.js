@@ -354,6 +354,49 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 })();
 
+// 읽기 전용 진단: "청년부 실제 잔액 구성"이 비정상적으로 커 보이는 원인과,
+// 청년부 계정으로 잘못 들어가 있을 수 있는 카페 관련 수동입력 거래를
+// 찾기 위해 현재 정산/거래 데이터를 로그로만 출력한다 (아무것도 바꾸지
+// 않음). DIAG_ACCOUNTS_20261120=1일 때만, 매 배포/재시작마다 실행.
+if (process.env.DIAG_ACCOUNTS_20261120 === '1') {
+  const allSettlements = db.getSettlements().slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  console.log('[diag] ===== 전체 정산(settlements) 목록 (' + allSettlements.length + '건) =====');
+  allSettlements.forEach((s) => {
+    console.log(`[diag] ${s.createdAt} | date=${s.date} | account=${settlementAccount(s)} (raw=${s.account || ''}) | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | memo=${(s.memo || '').slice(0, 60)}`);
+  });
+
+  console.log('[diag] ===== youth / cafe breakdown =====');
+  console.log('[diag] youth:', JSON.stringify(computeAccountBreakdown('youth')));
+  console.log('[diag] cafe: ', JSON.stringify(computeAccountBreakdown('cafe')));
+
+  // account='youth'로 잡히는 수동입력(manual/membership) 거래를 작성자별로
+  // 묶어서 건수/합계/카테고리를 보여준다 — 집사님이 입력한 카페 관련 건을
+  // 찾아내기 위함. cafe-pos 자동동기화(source='cafe') 건은 이미 account
+  // 분리가 되어 있으므로 제외.
+  const allTxns = db.getTransactions();
+  const candidates = allTxns.filter((t) => txnAccount(t) === 'youth' && t.source !== 'cafe' && t.source !== 'channel-transfer' && t.source !== 'transfer');
+  const byAuthor = {};
+  candidates.forEach((t) => {
+    const key = t.author || '(미기재)';
+    if (!byAuthor[key]) byAuthor[key] = { count: 0, income: 0, expense: 0, categories: new Set() };
+    byAuthor[key].count += 1;
+    byAuthor[key][t.type] += t.amount;
+    byAuthor[key].categories.add(t.category || '');
+  });
+  console.log('[diag] ===== account=youth 수동/회비 거래, 작성자별 집계 =====');
+  Object.entries(byAuthor).forEach(([author, v]) => {
+    console.log(`[diag] 작성자="${author}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense} | 카테고리=[${[...v.categories].join(', ')}]`);
+  });
+
+  // channel이 비어 있는(=현금/TnG/은행 어디에도 못 넣는) account=youth 거래
+  // 목록 — "실제 잔액 구성"엔 안 잡히고 unattributedAmount로만 잡히는 건들.
+  const noChannel = candidates.filter((t) => !t.channel);
+  console.log('[diag] ===== account=youth, channel 없는 거래 ' + noChannel.length + '건 (최근 15개만) =====');
+  noChannel.slice(-15).forEach((t) => {
+    console.log(`[diag]   ${t.date} | ${t.type} | ${t.category} | ${t.item} | ${t.amount} | author=${t.author || ''} | memo=${(t.memo || '').slice(0, 40)}`);
+  });
+}
+
 // One-time seed: 2026년 4/30~5/2 "1차 수련회" 재정 내역 (별도로 관리되던
 // 엑셀 파일을 Finance로 이전). 회비/후원은 사람별로 각 건씩, 구매 내역은
 // 88건을 하나로 뭉쳐서 "행사비 - 1차 수련회"로 반영한다 ("ⓘ 리더단 회의비"
