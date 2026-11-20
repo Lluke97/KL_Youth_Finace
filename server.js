@@ -520,6 +520,16 @@ if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
   }
 }
 
+// 현재 전체 정산(settlement) 목록을 날짜순으로 덤프. 아무것도 바꾸지
+// 않음. DIAG_LIST_SETTLEMENTS_20261121=1일 때만.
+if (process.env.DIAG_LIST_SETTLEMENTS_20261121 === '1') {
+  const s8 = db.getSettlements().slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  console.log('[diag6] ===== 정산 전체 ' + s8.length + '건 =====');
+  s8.forEach((s) => {
+    console.log(`[diag6]   ${s.date} | account=${s.account} | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | txnId=${s.txnId || ''} | createdAt=${s.createdAt} | memo="${s.memo || ''}"`);
+  });
+}
+
 // 테스트로 만든 RM100 현금→계좌이체 전환(계좌 전환 탭 테스트) 삭제.
 // /api/admin/transactions/:id DELETE와 동일한 로직 — 짝 거래 + 관련
 // auto 정산 스냅샷도 같이 지운다. 멱등 — 해당 transferId가 없으면 통과.
