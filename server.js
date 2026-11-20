@@ -489,6 +489,26 @@ if (process.env.DIAG_YOUTH_SETTLEMENT_LIST_20261121 === '1') {
   console.log(`[diag2] ===== 합계: 수입 ${inc} / 지출 ${exp} / 순액 ${inc - exp} =====`);
 }
 
+// "집사님" 관련 거래(전체 소스/계좌 불문) + 금액 600 거래를 전부 찾는다.
+// 아무것도 바꾸지 않음. DIAG_FIND_DEACON_600_20261121=1일 때만.
+if (process.env.DIAG_FIND_DEACON_600_20261121 === '1') {
+  const all5 = db.getTransactions();
+  const hits = all5.filter((t) =>
+    String(t.payer || '').includes('집사님') ||
+    String(t.author || '').includes('집사님') ||
+    String(t.item || '').includes('집사님') ||
+    t.amount === 600
+  ).sort((a, b) => a.date.localeCompare(b.date));
+  console.log('[diag3] ===== "집사님" 관련 또는 금액=600 거래 ' + hits.length + '건 =====');
+  hits.forEach((t) => {
+    console.log(`[diag3]   ${t.date} | ${t.type} | account=${txnAccount(t)} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | tag=${t.tag || ''} | author=${t.author || ''} | id=${t.id}`);
+  });
+  const settlementsAll = db.getSettlements();
+  const sHits = settlementsAll.filter((s) => String(s.memo || '').includes('집사님') || s.total === 600);
+  console.log('[diag3] 관련 정산: ' + sHits.length + '건');
+  sHits.forEach((s) => console.log('[diag3]   ' + JSON.stringify(s)));
+}
+
 // 집사님이 정리해서 넘겨준 과거 카페 지출입금("집사님(정리본)") 53건이
 // tag=youth-general("청년부 일반지출")로 들어가 있던 걸 cafe-ops("카페
 // 운영")로 바꾼다. 내용은 실제로 청년부를 위해 쓴 카페 돈(식사 지원 등)이
