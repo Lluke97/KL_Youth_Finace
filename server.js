@@ -454,6 +454,23 @@ if (process.env.DIAG_ACCOUNTS_20261120 === '1') {
   });
 }
 
+// 읽기 전용 진단: 임창현님 개인 "회비 납부 내역" 엑셀(회비 수납 74건 +
+// 일반운영 지출 26건)을 건별로 앱에 반영하기 전에, 이미 수동으로 입력돼
+// 있어 중복될 만한 건이 있는지 확인하기 위해 account=youth인 수동/회비
+// 거래를 전부 날짜순으로 덤프한다 (cafe/채널전환/수련회시드는 제외).
+// DIAG_YOUTH_LEDGER_20261120=1일 때만, 아무것도 바꾸지 않음.
+if (process.env.DIAG_YOUTH_LEDGER_20261120 === '1') {
+  const allTxns2 = db.getTransactions();
+  const ledger = allTxns2
+    .filter((t) => txnAccount(t) === 'youth' && t.source !== 'cafe' && t.source !== 'channel-transfer' && !(t.externalId || '').startsWith('retreat1_'))
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
+  console.log('[diag] ===== account=youth, 수련회시드 제외 거래 ' + ledger.length + '건 (날짜순) =====');
+  ledger.forEach((t) => {
+    console.log(`[diag]   ${t.date} | ${t.type} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | author=${t.author || ''} | id=${t.id}`);
+  });
+}
+
 // 집사님이 정리해서 넘겨준 과거 카페 지출입금("집사님(정리본)") 53건이
 // tag=youth-general("청년부 일반지출")로 들어가 있던 걸 cafe-ops("카페
 // 운영")로 바꾼다. 내용은 실제로 청년부를 위해 쓴 카페 돈(식사 지원 등)이
