@@ -520,6 +520,28 @@ if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
   }
 }
 
+// [되돌림] ADD_DEACON_600_CAFE_TRANSFER_20261121이 잘못됐음 — 1차 수련회
+// 수입(9,550)은 이미 "전부 계좌"로 강제 전환(forceYouthChannelToBank)
+// 되어 있어서, 부장집사님이 실제로는 현금으로 들고 있던 RM600도 이미
+// 장부엔 "계좌에 있는 돈"으로 포함돼 있었다. 거기에 카페 후원 600을
+// 추가로 얹어버려서 청년부 쪽에 RM600이 이중으로 잡혀버림(2,377.70 →
+// 2,977.70으로 잘못 증가, 카페는 18,019.25 → 17,419.25로 잘못 감소).
+// 그 거래쌍(transferId=xfer_deacon600_20261121)과 연결된 auto 정산
+// 스냅샷을 전부 삭제해서 원래대로 되돌린다. 멱등.
+if (process.env.REVERT_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
+  const txns9 = db.getTransactions();
+  const idsToRemove9 = new Set(
+    txns9.filter((t) => t.transferId === 'xfer_deacon600_20261121').map((t) => t.id)
+  );
+  if (idsToRemove9.size) {
+    db.saveTransactions(txns9.filter((t) => !idsToRemove9.has(t.id)));
+    const settlements9 = db.getSettlements();
+    const kept9 = settlements9.filter((s) => !idsToRemove9.has(s.txnId));
+    if (kept9.length !== settlements9.length) db.saveSettlements(kept9);
+    console.log('[youth-budget] applied REVERT_DEACON_600_CAFE_TRANSFER_20261121: ' + idsToRemove9.size + '건 삭제(잘못 추가된 부장집사님 600 이체 되돌림)');
+  }
+}
+
 // 현재 전체 정산(settlement) 목록을 날짜순으로 덤프. 아무것도 바꾸지
 // 않음. DIAG_LIST_SETTLEMENTS_20261121=1일 때만.
 if (process.env.DIAG_LIST_SETTLEMENTS_20261121 === '1') {
