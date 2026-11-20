@@ -801,6 +801,73 @@ if (process.env.RESET_YOUTH_BASELINE_TO_BANK_20261120 === '1') {
   }
 }
 
+// "장부 기준 잔액"(거래 전체의 순합계, /api/summary)과 "실제 잔액 구성"
+// 총액(baseline+delta, /api/balance-breakdown)이 서로 달라서는 안 된다는
+// 요청에 따른 근본 보정. 둘이 달랐던 이유: 최초 실사(2026-11-14,
+// settle_seed0001, 현금 1,003.70/터치앤고 1,000/은행 15,438.60 = 총
+// 17,442.30)가 거래 내역으로 한 번도 입력된 적이 없어서, "실제 잔액
+// 구성"에는 반영돼 있는 그 금액이 "장부 기준 잔액"에는 아예 빠져 있었다.
+// 이 차액(실제 잔액 구성 총액 − 장부 기준 잔액)을 이월금 거래 한 건으로
+// 추가해 두 숫자를 정확히 일치시킨다. 동시에 그 거래 바로 직전 시점으로
+// "임시 기준점" 정산을 하나 찍어서(은행 잔액에서 차액만큼 미리 빼둠) 거래가
+// 더해진 뒤의 "실제 잔액 구성" 총액 자체는 전혀 바뀌지 않게 한다(지금 값
+// 그대로 유지, 구성도 그대로 전부 은행). 차액은 하드코딩하지 않고 배포
+// 시점의 실데이터로 직접 계산 — 그 사이 새 거래가 더 들어와 있어도 항상
+// 정확히 맞아떨어진다. 멱등 — 고정 id(tx_youthcarryover20261120)의 거래가
+// 이미 있으면 다시 안 함.
+if (process.env.SEED_YOUTH_CARRYOVER_RECONCILE_20261120 === '1') {
+  const existingTxns = db.getTransactions();
+  if (!existingTxns.some((t) => t.id === 'tx_youthcarryover20261120')) {
+    const breakdown = computeAccountBreakdown('youth');
+    const ledgerBalance = existingTxns
+      .filter((t) => txnAccount(t) === 'youth')
+      .reduce((sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount), 0);
+    const gap = Math.round((breakdown.current.total - ledgerBalance) * 100) / 100;
+
+    if (gap > 0) {
+      const now4 = new Date();
+      const rebaseAt = new Date(now4.getTime() - 1000).toISOString(); // 이월금 거래보다 1초 앞선 시각으로 고정해 순서를 보장
+
+      const settlements4 = db.getSettlements();
+      settlements4.push({
+        id: 'settle_youthcarryover_rebase_20261120',
+        date: todayStr(),
+        account: 'youth',
+        cash: breakdown.current.cash,
+        tng: breakdown.current.tng,
+        bank: breakdown.current.bank - gap,
+        total: breakdown.current.total - gap,
+        source: 'manual',
+        memo: `이월금 보정 작업용 임시 기준점 — 은행 ${breakdown.current.bank} → ${breakdown.current.bank - gap} (총액 ${breakdown.current.total} → ${breakdown.current.total - gap}). 바로 뒤에 이월금 거래 ${gap}을 추가해 총액을 ${breakdown.current.total}로 복원함.`,
+        createdAt: rebaseAt
+      });
+      db.saveSettlements(settlements4);
+
+      const txns4 = db.getTransactions();
+      txns4.push({
+        id: 'tx_youthcarryover20261120',
+        date: '2026-11-14',
+        type: 'income',
+        source: 'carryover',
+        account: 'youth',
+        tag: 'youth-general',
+        category: '이월금',
+        item: '이월금 - 2026-11-14 실사 확인 이전 누적자금',
+        amount: gap,
+        memo: '2026-11-14 최초 실사(현금 1,003.70/터치앤고 1,000/은행 15,438.60 = 총 17,442.30) 당시 이미 계좌에 있었지만 거래 내역으로 기록된 적 없던 자금을 이월금으로 반영. 장부 기준 잔액과 실제 잔액 구성 합계를 정확히 일치시키기 위한 1회성 보정.',
+        author: '임창현',
+        channel: 'bank',
+        externalId: null,
+        createdAt: now4.toISOString()
+      });
+      db.saveTransactions(txns4);
+      console.log('[youth-budget] applied SEED_YOUTH_CARRYOVER_RECONCILE_20261120: gap', gap, '-> 이월금 거래 추가, 장부 기준 잔액과 실제 잔액 구성 일치');
+    } else {
+      console.log('[youth-budget] SEED_YOUTH_CARRYOVER_RECONCILE_20261120: gap <= 0 (' + gap + '), 할 일 없음');
+    }
+  }
+}
+
 // 변경이력(히스토리) 시드: 2026-11-20 세션에 코드 배포로 일괄 반영된
 // 이관/수정 작업들을 관리자 "변경이력" 화면에서 볼 수 있도록 기록한다.
 // 멱등 — id가 이미 있으면 다시 안 넣음.
