@@ -179,7 +179,16 @@ const FAILED_ATTEMPT_LIMIT = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 function clientIp(req) {
-  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  // 신뢰할 수 없는 맨 왼쪽(공격자가 보낸 헤더 그대로)이 아니라, Railway
+  // 엣지가 실제 연결에서 붙인 맨 오른쪽 항목을 써야 한다 — 왼쪽을 쓰면
+  // 공격자가 X-Forwarded-For를 요청마다 바꿔서 로그인 잠금을 그냥 우회할
+  // 수 있었음(cafe-pos 쪽과 동일한 버그, 동일하게 수정).
+  const header = req.headers['x-forwarded-for'];
+  if (header) {
+    const parts = header.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return req.socket.remoteAddress || 'unknown';
 }
 
 function makeAuthGate({ realm, failMessage, matchFn }) {
@@ -262,78 +271,6 @@ function fmtSigned(n) {
   return (v >= 0 ? '+' : '') + v;
 }
 
-// One-time fix: an early cafe-pos test pushed a settlement with all-zero
-// cash/TnG/bank via the webhook, which is now the "latest" settlement and
-// displaced the correct real balance on the dashboard. Guarded by an env
-// var so it only runs when explicitly asked, and idempotent via a fixed id
-// so a restart or redeploy never applies it twice.
-if (process.env.FIX_SETTLEMENT_20261114 === '1') {
-  const __settlements = db.getSettlements();
-  const __marker = 'settle_fix20261114';
-  if (!__settlements.some((s) => s.id === __marker)) {
-    __settlements.push({
-      id: __marker,
-      date: '2026-11-14',
-      cash: 1003.7,
-      tng: 1000,
-      bank: 15438.6,
-      total: 1003.7 + 1000 + 15438.6,
-      source: 'manual',
-      memo: '실제 잔액 수동 보정 (현금 1,003.70 / 터치앤고 1,000 / 은행 15,438.60)',
-      createdAt: new Date().toISOString()
-    });
-    db.saveSettlements(__settlements);
-    console.log('[youth-budget] applied FIX_SETTLEMENT_20261114 migration');
-  }
-}
-
-// One-time fix: the 2026-11-14 settlement above was taken before the
-// RM348 "토요모임 저녁 · 돈까스랩" purchase was paid for by card, so it no
-// longer matches the ledger (which already counts that expense). Adds a
-// follow-up settlement with the card payment subtracted from the bank
-// figure. Guarded by an env var + fixed id, same pattern as the fix above.
-if (process.env.SETTLE_CARDFIX_20261114 === '1') {
-  const __settlements2 = db.getSettlements();
-  const __marker2 = 'settle_cardfix20261114';
-  if (!__settlements2.some((s) => s.id === __marker2)) {
-    const cash = 1003.7, tng = 1000, bank = 15438.6 - 348;
-    __settlements2.push({
-      id: __marker2,
-      date: '2026-11-14',
-      cash,
-      tng,
-      bank,
-      total: cash + tng + bank,
-      source: 'manual',
-      memo: '토요모임 저녁(돈까스랩) RM348 카드 결제 반영 (은행 15,438.60 → 15,090.60)',
-      createdAt: new Date().toISOString()
-    });
-    db.saveSettlements(__settlements2);
-    console.log('[youth-budget] applied SETTLE_CARDFIX_20261114 migration');
-  }
-}
-
-// One-time fix: before today's fix, the cafe-settlement webhook took
-// cafe-pos's own cash/bank numbers (its own drawer/wallet count) and used
-// them as an absolute OVERWRITE of Finance's cash/bank, instead of adding
-// the increase the way it already correctly did for TnG. Every settlement
-// the webhook pushed under that old code is missing a `cashIncrease` field
-// (today's fix always sets one), so that's how we find them. Removing them
-// makes computeBalanceBreakdown() fall back to the next most recent real
-// settlement and recompute the live balance from the (correctly tracked)
-// transaction ledger since then — no manual number-guessing involved.
-// Guarded by an env var; safe to leave on since a second run finds nothing
-// left to remove.
-if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
-  const __settlements3 = db.getSettlements();
-  const __bad = __settlements3.filter((s) => s.source === 'cafe-pos' && typeof s.cashIncrease !== 'number');
-  if (__bad.length) {
-    const __kept = __settlements3.filter((s) => !(s.source === 'cafe-pos' && typeof s.cashIncrease !== 'number'));
-    db.saveSettlements(__kept);
-    console.log('[youth-budget] removed', __bad.length, 'pre-fix cafe-pos settlement(s) that had overwritten cash/bank:', __bad.map((s) => s.id));
-  }
-}
-
 // 집사님이 정리해서 넘겨준 이월 잔액(source==='carryover')은 사실 카페 쪽
 // 누적 자금이지 청년부 자체 돈이 아니므로, 카페/청년부 계좌 분리 이후엔
 // 카페 계좌로 분류해야 한다. 이미 account:'cafe'로 지정된 건 다시
@@ -355,11 +292,20 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
 })();
 
 // "소스가 카페면 카페 제정이야" — cafe-pos에서 동기화된(source==='cafe')
-// 거래는 예외 없이 카페 계좌(account='cafe') · 카페 운영(tag='cafe-ops')
-// 이어야 한다. 실제 카페→청년부 이체는 별도 source('transfer')로 기록되므로
-// (/api/admin/transfer 참고), source='cafe'인데 account가 'youth'로 덮어써진
-// 건은 전부 과거의 수동 오분류다. 이미 올바른 건은 다시 건드리지 않으므로
-// (멱등) 별도 env 게이트 없이 매 배포/재시작마다 돌아도 안전.
+// 거래는 예외 없이 카페 계좌(account='cafe')여야 한다. 실제 카페→청년부
+// 이체는 별도 source('transfer')로 기록되므로(/api/admin/transfer 참고),
+// source='cafe'인데 account가 'youth'로 덮어써진 건은 전부 과거의 수동
+// 오분류다. account는 이미 올바른 건 다시 건드리지 않으므로(멱등) 별도
+// env 게이트 없이 매 배포/재시작마다 돌아도 안전.
+//
+// tag는 전과 달리 "태그가 아예 없을 때만" cafe-ops로 채워준다 — 예전엔
+// tag가 cafe-ops가 아니면 매번 강제로 되돌렸는데, 그러면 관리자가 "확인
+// 필요"(needs-review)로 들어온 건을 손으로 "카페 운영"/"청년부 일반지출"
+// 중 하나로 재분류해도 다음 배포/재시작 때 전부 cafe-ops로 도로 덮어써져
+// 버렸다(그 재분류 기능이 사실상 무용지물이었던 버그). cafeSync.js가 동기화
+// 시점에 이미 tag를 채워 넣으므로(원재료/운영비→cafe-ops, 기타→needs-review)
+// 여기서는 과거(그 로직이 없던 시절) 데이터처럼 tag가 비어있는 경우에만
+// 보정한다.
 (function forceCafeSourceToCafeAccount() {
   const txns = db.getTransactions();
   let accountChanged = 0;
@@ -367,547 +313,20 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   txns.forEach((t) => {
     if (t.source === 'cafe') {
       if (t.account !== 'cafe') { t.account = 'cafe'; accountChanged += 1; }
-      if (t.tag !== 'cafe-ops') { t.tag = 'cafe-ops'; tagChanged += 1; }
+      if (!t.tag) { t.tag = 'cafe-ops'; tagChanged += 1; }
     }
   });
   if (accountChanged || tagChanged) {
     db.saveTransactions(txns);
-    console.log(`[youth-budget] source=cafe 거래 중 계좌 재지정 ${accountChanged}건, 태그 재지정(→카페 운영) ${tagChanged}건 완료.`);
+    console.log(`[youth-budget] source=cafe 거래 중 계좌 재지정 ${accountChanged}건, 태그 없는 건 카페운영으로 채움 ${tagChanged}건 완료.`);
   }
 })();
 
-// 읽기 전용 진단: "청년부 실제 잔액 구성"이 비정상적으로 커 보이는 원인과,
-// 청년부 계정으로 잘못 들어가 있을 수 있는 카페 관련 수동입력 거래를
-// 찾기 위해 현재 정산/거래 데이터를 로그로만 출력한다 (아무것도 바꾸지
-// 않음). DIAG_ACCOUNTS_20261120=1일 때만, 매 배포/재시작마다 실행.
-if (process.env.DIAG_ACCOUNTS_20261120 === '1') {
-  const allSettlements = db.getSettlements().slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  console.log('[diag] ===== 전체 정산(settlements) 목록 (' + allSettlements.length + '건) =====');
-  allSettlements.forEach((s) => {
-    console.log(`[diag] ${s.createdAt} | date=${s.date} | account=${settlementAccount(s)} (raw=${s.account || ''}) | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | memo=${(s.memo || '').slice(0, 60)}`);
-  });
-
-  console.log('[diag] ===== youth / cafe breakdown =====');
-  console.log('[diag] youth:', JSON.stringify(computeAccountBreakdown('youth')));
-  console.log('[diag] cafe: ', JSON.stringify(computeAccountBreakdown('cafe')));
-
-  // account='youth'로 잡히는 수동입력(manual/membership) 거래를 작성자별로
-  // 묶어서 건수/합계/카테고리를 보여준다 — 집사님이 입력한 카페 관련 건을
-  // 찾아내기 위함. cafe-pos 자동동기화(source='cafe') 건은 이미 account
-  // 분리가 되어 있으므로 제외.
-  const allTxns = db.getTransactions();
-  const candidates = allTxns.filter((t) => txnAccount(t) === 'youth' && t.source !== 'cafe' && t.source !== 'channel-transfer' && t.source !== 'transfer');
-  const byAuthor = {};
-  candidates.forEach((t) => {
-    const key = t.author || '(미기재)';
-    if (!byAuthor[key]) byAuthor[key] = { count: 0, income: 0, expense: 0, categories: new Set() };
-    byAuthor[key].count += 1;
-    byAuthor[key][t.type] += t.amount;
-    byAuthor[key].categories.add(t.category || '');
-  });
-  console.log('[diag] ===== account=youth 수동/회비 거래, 작성자별 집계 =====');
-  Object.entries(byAuthor).forEach(([author, v]) => {
-    console.log(`[diag] 작성자="${author}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense} | 카테고리=[${[...v.categories].join(', ')}]`);
-  });
-
-  // channel이 비어 있는(=현금/TnG/은행 어디에도 못 넣는) account=youth 거래
-  // 목록 — "실제 잔액 구성"엔 안 잡히고 unattributedAmount로만 잡히는 건들.
-  const noChannel = candidates.filter((t) => !t.channel);
-  console.log('[diag] ===== account=youth, channel 없는 거래 ' + noChannel.length + '건 (최근 15개만) =====');
-  noChannel.slice(-15).forEach((t) => {
-    console.log(`[diag]   ${t.date} | ${t.type} | ${t.category} | ${t.item} | ${t.amount} | author=${t.author || ''} | memo=${(t.memo || '').slice(0, 40)}`);
-  });
-
-  // cafe-pos에서 동기화된(source='cafe') 거래 — 태그(카페운영/청년부지출/
-  // 확인필요)별, 그리고 그 중 account가 명시적으로 'youth'로 덮어써진 건이
-  // 있는지. "집사님이 입력한 카페 지출/입금이 청년부 일반지출로 돼있다"는
-  // 말이 이 데이터(tag 분류) 얘기인지 확인하기 위함.
-  const cafeSynced = allTxns.filter((t) => t.source === 'cafe');
-  const byTag2 = {};
-  cafeSynced.forEach((t) => {
-    const key = t.tag || '(태그없음)';
-    if (!byTag2[key]) byTag2[key] = { count: 0, expense: 0, income: 0, overriddenToYouth: 0 };
-    byTag2[key].count += 1;
-    byTag2[key][t.type] += t.amount;
-    if (t.account === 'youth') byTag2[key].overriddenToYouth += 1;
-  });
-  console.log('[diag] ===== source=cafe(cafe-pos 동기화) 거래 ' + cafeSynced.length + '건, 태그별 집계 =====');
-  Object.entries(byTag2).forEach(([tag, v]) => {
-    console.log(`[diag] 태그="${tag}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense} | account=youth로 덮어쓴 건=${v.overriddenToYouth}`);
-  });
-
-  const youthGeneralCafe = cafeSynced.filter((t) => t.tag === 'youth-general');
-  const byAuthor2 = {};
-  youthGeneralCafe.forEach((t) => {
-    const key = t.author || t.vendor || '(미기재)';
-    if (!byAuthor2[key]) byAuthor2[key] = { count: 0, expense: 0, income: 0 };
-    byAuthor2[key].count += 1;
-    byAuthor2[key][t.type] += t.amount;
-  });
-  console.log('[diag] ===== source=cafe & tag=youth-general(청년부지출로 분류된 카페 거래) ' + youthGeneralCafe.length + '건, 작성자/거래처별 =====');
-  Object.entries(byAuthor2).forEach(([author, v]) => {
-    console.log(`[diag] 작성자/거래처="${author}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense}`);
-  });
-  console.log('[diag] ===== 위 목록 샘플 10건 =====');
-  youthGeneralCafe.slice(0, 10).forEach((t) => {
-    console.log(`[diag]   ${t.date} | ${t.type} | ${t.item} | ${t.amount} | author=${t.author || ''} | vendor=${t.vendor || ''} | memo=${(t.memo || '').slice(0, 40)}`);
-  });
-}
-
-// 읽기 전용 진단: 임창현님 개인 "회비 납부 내역" 엑셀(회비 수납 74건 +
-// 일반운영 지출 26건)을 건별로 앱에 반영하기 전에, 이미 수동으로 입력돼
-// 있어 중복될 만한 건이 있는지 확인하기 위해 account=youth인 수동/회비
-// 거래를 전부 날짜순으로 덤프한다 (cafe/채널전환/수련회시드는 제외).
-// DIAG_YOUTH_LEDGER_20261120=1일 때만, 아무것도 바꾸지 않음.
-if (process.env.DIAG_YOUTH_LEDGER_20261120 === '1') {
-  const allTxns2 = db.getTransactions();
-  const ledger = allTxns2
-    .filter((t) => txnAccount(t) === 'youth' && t.source !== 'cafe' && t.source !== 'channel-transfer' && !(t.externalId || '').startsWith('retreat1_'))
-    .slice()
-    .sort((a, b) => a.date.localeCompare(b.date));
-  console.log('[diag] ===== account=youth, 수련회시드 제외 거래 ' + ledger.length + '건 (날짜순) =====');
-  ledger.forEach((t) => {
-    console.log(`[diag]   ${t.date} | ${t.type} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | author=${t.author || ''} | id=${t.id}`);
-  });
-}
-
-// 청년부 결산용 — account=youth 전체 거래를 날짜순으로 덤프(채널전환
-// 내부조정만 제외, 수련회시드 포함). 아무것도 바꾸지 않음.
-// DIAG_YOUTH_SETTLEMENT_LIST_20261121=1일 때만.
-if (process.env.DIAG_YOUTH_SETTLEMENT_LIST_20261121 === '1') {
-  const allTxns3 = db.getTransactions();
-  const ledger3 = allTxns3
-    .filter((t) => txnAccount(t) === 'youth' && t.source !== 'channel-transfer')
-    .slice()
-    .sort((a, b) => a.date.localeCompare(b.date));
-  let inc = 0, exp = 0;
-  console.log('[diag2] ===== account=youth 결산용 전체 거래 ' + ledger3.length + '건 (날짜순) =====');
-  ledger3.forEach((t) => {
-    if (t.type === 'income') inc += t.amount; else exp += t.amount;
-    console.log(`[diag2]   ${t.date} | ${t.type} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | tag=${t.tag || ''}`);
-  });
-  console.log(`[diag2] ===== 합계: 수입 ${inc} / 지출 ${exp} / 순액 ${inc - exp} =====`);
-}
-
-// 1차 수련회 잔액(2,557.18) 중 부장집사님이 현금으로 보관 중이던
-// RM600을, 카페가 대신 청년부 계좌로 채워넣는 것으로 기록한다
-// (/api/admin/transfer와 동일한 구조: 카페=지출, 청년부=수입, 날짜는
-// 수련회 날짜 2026-04-30). 카페는 -600, 청년부는 +600, 전체(카페+청년부)
-// 합계는 변동 없음(계좌 간 이동일 뿐). transferId 고정 — 멱등.
-if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
-  const txns7 = db.getTransactions();
-  const transferId7 = 'xfer_deacon600_20261121';
-  if (!txns7.some((t) => t.transferId === transferId7)) {
-    const now7 = new Date().toISOString();
-    const memo7 = '1차 수련회 잔액 중 부장집사님이 현금 보관 중이던 RM600을 카페가 대신 청년부 계좌로 채워넣음(수련회 날짜 기준 소급)';
-    const outTxn7 = {
-      id: 'tx_' + uid(), date: '2026-04-30', type: 'expense', source: 'transfer',
-      account: 'cafe', tag: null, category: '청년부 후원', item: '청년부 후원/이체',
-      amount: 600, channel: channelToBucket('계좌이체'), memo: memo7, author: '주섬주섬청년부',
-      transferId: transferId7, externalId: null, createdAt: now7
-    };
-    const inTxn7 = {
-      id: 'tx_' + uid(), date: '2026-04-30', type: 'income', source: 'transfer',
-      account: 'youth', tag: 'youth-general', category: '카페 후원금', item: '카페 후원금',
-      amount: 600, channel: channelToBucket('계좌이체'), memo: memo7, author: '주섬주섬청년부',
-      transferId: transferId7, externalId: null, createdAt: now7
-    };
-    txns7.push(outTxn7, inTxn7);
-    db.saveTransactions(txns7);
-    recordAutoSettlement(outTxn7);
-    recordAutoSettlement(inTxn7);
-    console.log('[youth-budget] applied ADD_DEACON_600_CAFE_TRANSFER_20261121: 카페 -600 / 청년부 +600 (2026-04-30)');
-  }
-}
-
-// [되돌림] ADD_DEACON_600_CAFE_TRANSFER_20261121이 잘못됐음 — 1차 수련회
-// 수입(9,550)은 이미 "전부 계좌"로 강제 전환(forceYouthChannelToBank)
-// 되어 있어서, 부장집사님이 실제로는 현금으로 들고 있던 RM600도 이미
-// 장부엔 "계좌에 있는 돈"으로 포함돼 있었다. 거기에 카페 후원 600을
-// 추가로 얹어버려서 청년부 쪽에 RM600이 이중으로 잡혀버림(2,377.70 →
-// 2,977.70으로 잘못 증가, 카페는 18,019.25 → 17,419.25로 잘못 감소).
-// 그 거래쌍(transferId=xfer_deacon600_20261121)과 연결된 auto 정산
-// 스냅샷을 전부 삭제해서 원래대로 되돌린다. 멱등.
-if (process.env.REVERT_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
-  const txns9 = db.getTransactions();
-  const idsToRemove9 = new Set(
-    txns9.filter((t) => t.transferId === 'xfer_deacon600_20261121').map((t) => t.id)
-  );
-  if (idsToRemove9.size) {
-    db.saveTransactions(txns9.filter((t) => !idsToRemove9.has(t.id)));
-    const settlements9 = db.getSettlements();
-    const kept9 = settlements9.filter((s) => !idsToRemove9.has(s.txnId));
-    if (kept9.length !== settlements9.length) db.saveSettlements(kept9);
-    console.log('[youth-budget] applied REVERT_DEACON_600_CAFE_TRANSFER_20261121: ' + idsToRemove9.size + '건 삭제(잘못 추가된 부장집사님 600 이체 되돌림)');
-  }
-}
-
-// 현재 전체 정산(settlement) 목록을 날짜순으로 덤프. 아무것도 바꾸지
-// 않음. DIAG_LIST_SETTLEMENTS_20261121=1일 때만.
-if (process.env.DIAG_LIST_SETTLEMENTS_20261121 === '1') {
-  const s8 = db.getSettlements().slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  console.log('[diag6] ===== 정산 전체 ' + s8.length + '건 =====');
-  s8.forEach((s) => {
-    console.log(`[diag6]   ${s.date} | account=${s.account} | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | txnId=${s.txnId || ''} | createdAt=${s.createdAt} | memo="${s.memo || ''}"`);
-  });
-}
-
-// 테스트로 만든 RM100 현금→계좌이체 전환(계좌 전환 탭 테스트) 삭제.
-// /api/admin/transactions/:id DELETE와 동일한 로직 — 짝 거래 + 관련
-// auto 정산 스냅샷도 같이 지운다. 멱등 — 해당 transferId가 없으면 통과.
-if (process.env.DELETE_TEST_CHANNEL_TRANSFER_20261121 === '1') {
-  const txns8 = db.getTransactions();
-  const idsToRemove8 = new Set(
-    txns8.filter((t) => t.transferId === 'chxfer_mwp739k789ihdk').map((t) => t.id)
-  );
-  if (idsToRemove8.size) {
-    db.saveTransactions(txns8.filter((t) => !idsToRemove8.has(t.id)));
-    const settlements8 = db.getSettlements();
-    const kept8 = settlements8.filter((s) => !idsToRemove8.has(s.txnId));
-    if (kept8.length !== settlements8.length) db.saveSettlements(kept8);
-    console.log('[youth-budget] applied DELETE_TEST_CHANNEL_TRANSFER_20261121: ' + idsToRemove8.size + '건 삭제(테스트 RM100 계좌 전환)');
-  }
-}
-
-// transfer/channel-transfer 쌍이 날짜·계좌·금액까지 똑같이 겹치는 게
-// 있는지(실수로 두 번 기록됐는지) 확인한다. 아무것도 바꾸지 않음.
-// DIAG_CHECK_TRANSFER_DUPES_20261121=1일 때만.
-if (process.env.DIAG_CHECK_TRANSFER_DUPES_20261121 === '1') {
-  const all7 = db.getTransactions();
-  const pairs7 = all7.filter((t) => (t.source === 'transfer' || t.source === 'channel-transfer') && t.type === 'expense');
-  console.log('[diag5] ===== transfer/channel-transfer 쌍 ' + pairs7.length + '건 =====');
-  pairs7.sort((a, b) => a.date.localeCompare(b.date)).forEach((t) => {
-    const sibling = all7.find((x) => x.transferId === t.transferId && x.id !== t.id);
-    console.log(`[diag5]   ${t.date} | source=${t.source} | account=${txnAccount(t)} | item="${t.item}" | ${t.amount} | channel=${t.channel}->${sibling ? sibling.channel : '?'} | transferId=${t.transferId} | txId=${t.id} | createdAt=${t.createdAt}`);
-  });
-  const key = (t) => `${t.date}|${txnAccount(t)}|${t.source}|${t.amount}|${t.channel}`;
-  const byKey = {};
-  pairs7.forEach((t) => { (byKey[key(t)] = byKey[key(t)] || []).push(t); });
-  const dupeKeys = Object.entries(byKey).filter(([, v]) => v.length > 1);
-  console.log('[diag5] 날짜/계좌/소스/금액/채널까지 겹치는 그룹: ' + dupeKeys.length + '건');
-  dupeKeys.forEach(([k, v]) => console.log('[diag5]   ' + k + ' -> ' + v.map((t) => t.id + '(transferId=' + t.transferId + ', createdAt=' + t.createdAt + ')').join(', ')));
-}
-
-// 윤수빈/임혜란 집사님 관련 거래를 전부 찾는다. 아무것도 바꾸지 않음.
-// DIAG_FIND_YOONSUBIN_20261121=1일 때만.
-if (process.env.DIAG_FIND_YOONSUBIN_20261121 === '1') {
-  const all6 = db.getTransactions();
-  const hits6 = all6.filter((t) =>
-    String(t.payer || '').includes('윤수빈') ||
-    String(t.item || '').includes('윤수빈') ||
-    String(t.memo || '').includes('윤수빈') ||
-    String(t.payer || '').includes('임혜란') ||
-    String(t.item || '').includes('임혜란') ||
-    String(t.memo || '').includes('임혜란')
-  ).sort((a, b) => a.date.localeCompare(b.date));
-  console.log('[diag4] ===== 윤수빈/임혜란 관련 거래 ' + hits6.length + '건 =====');
-  hits6.forEach((t) => {
-    console.log(`[diag4]   ${t.date} | ${t.type} | account=${txnAccount(t)} | ${t.category} | item="${t.item || ''}" | payer="${t.payer || ''}" | ${t.amount} | source=${t.source} | memo="${t.memo || ''}" | id=${t.id}`);
-  });
-}
-
-// "집사님" 관련 거래(전체 소스/계좌 불문) + 금액 600 거래를 전부 찾는다.
-// 아무것도 바꾸지 않음. DIAG_FIND_DEACON_600_20261121=1일 때만.
-if (process.env.DIAG_FIND_DEACON_600_20261121 === '1') {
-  const all5 = db.getTransactions();
-  const hits = all5.filter((t) =>
-    String(t.payer || '').includes('집사님') ||
-    String(t.author || '').includes('집사님') ||
-    String(t.item || '').includes('집사님') ||
-    t.amount === 600
-  ).sort((a, b) => a.date.localeCompare(b.date));
-  console.log('[diag3] ===== "집사님" 관련 또는 금액=600 거래 ' + hits.length + '건 =====');
-  hits.forEach((t) => {
-    console.log(`[diag3]   ${t.date} | ${t.type} | account=${txnAccount(t)} | ${t.category} | ${t.item || ''} | ${t.payer || ''} | ${t.amount} | source=${t.source} | tag=${t.tag || ''} | author=${t.author || ''} | id=${t.id}`);
-  });
-  const settlementsAll = db.getSettlements();
-  const sHits = settlementsAll.filter((s) => String(s.memo || '').includes('집사님') || s.total === 600);
-  console.log('[diag3] 관련 정산: ' + sHits.length + '건');
-  sHits.forEach((s) => console.log('[diag3]   ' + JSON.stringify(s)));
-}
-
-// 집사님이 정리해서 넘겨준 과거 카페 지출입금("집사님(정리본)") 53건이
-// tag=youth-general("청년부 일반지출")로 들어가 있던 걸 cafe-ops("카페
-// 운영")로 바꾼다. 내용은 실제로 청년부를 위해 쓴 카페 돈(식사 지원 등)이
-// 맞지만, 이미 카페 쪽 정산으로 마감된 금액이라 청년부 자체 장부와는
-// 분리해야 한다는 판단 — account는 원래도 'cafe'라 안 바뀜, tag만 바뀜.
-// 멱등 — 조건(source=cafe, tag=youth-general, 해당 작성자)에 맞는 게
-// 없으면 더 이상 할 일이 없으므로 재실행해도 안전.
-if (process.env.RETAG_DEACON_CAFE_EXPENSES_20261120 === '1') {
-  const txns = db.getTransactions();
-  let changed = 0;
-  txns.forEach((t) => {
-    if (t.source === 'cafe' && t.tag === 'youth-general' && t.author === '집사님(정리본)') {
-      t.tag = 'cafe-ops';
-      changed += 1;
-    }
-  });
-  if (changed) {
-    db.saveTransactions(txns);
-    console.log('[youth-budget] applied RETAG_DEACON_CAFE_EXPENSES_20261120 migration:', changed, '건을 cafe-ops로 재태깅');
-  }
-}
-
-// One-time seed: 2026년 4/30~5/2 "1차 수련회" 재정 내역 (별도로 관리되던
-// 엑셀 파일을 Finance로 이전). 회비/후원은 사람별로 각 건씩, 구매 내역은
-// 88건을 하나로 뭉쳐서 "행사비 - 1차 수련회"로 반영한다 ("ⓘ 리더단 회의비"
-// 7건/RM348은 엑셀에도 "별도항목/후원 포함 x"로 표시돼 있어 수련회 예산에서
-// 제외). 멱등 — externalId가 'retreat1_'로 시작하는 거래가 이미 있으면 다시
-// 넣지 않으므로 재배포/재시작에도 안전.
-if (process.env.SEED_RETREAT1_20261120 === '1') {
-  const __txns = db.getTransactions();
-  if (!__txns.some((t) => t.externalId && t.externalId.startsWith('retreat1_'))) {
-    const now = new Date().toISOString();
-    const mkIncome = (externalId, date, category, payer, amount, receiveChannel, memo) => ({
-      id: 'tx_' + uid(),
-      date,
-      type: 'income',
-      source: category === '회비' ? 'membership' : 'manual',
-      account: 'youth',
-      tag: 'youth-general',
-      category,
-      item: `${category} - ${payer}`,
-      payer,
-      receiveChannel,
-      channel: channelToBucket(receiveChannel),
-      amount,
-      memo: memo || '',
-      author: '임창현',
-      externalId,
-      createdAt: now
-    });
-    // 회비 (20명 중 박해령 1명은 100 납부 후 전액 환불되어 순액 0 — 반영 생략)
-    const FEE_ROWS = [
-      ['2026-04-08', '황나엘', 150, 'QR'],
-      ['2026-04-11', '오찬영', 100, 'QR', '1박2일'],
-      ['2026-04-13', '강은수', 125, 'QR'],
-      ['2026-04-16', '한윤서', 125, 'QR'],
-      ['2026-04-18', '윤수빈', 125, 'QR'],
-      ['2026-04-18', '전용준 집사님', 125, 'QR'],
-      ['2026-04-18', '홍서희', 125, 'QR'],
-      ['2026-04-18', '전소윤', 125, 'Cash'],
-      ['2026-04-18', '심민석', 125, 'Cash'],
-      ['2026-04-18', '원가온', 125, 'Cash'],
-      ['2026-04-19', '임창현', 150, 'QR'],
-      ['2026-04-19', '김정음', 150, 'QR'],
-      ['2026-04-19', '김우제', 150, 'Cash'],
-      ['2026-04-20', '김애스더', 100, 'QR', '1박2일'],
-      ['2026-04-22', '김보민', 100, 'QR', '1박2일'],
-      ['2026-04-22', '김효찬', 150, 'QR'],
-      ['2026-04-26', '최원준', 150, 'QR'],
-      ['2026-04-27', '서연우', 150, 'QR'],
-      ['2026-04-28', '박규리', 150, 'QR']
-    ];
-    const feeTxns = FEE_ROWS.map((row, i) => {
-      const [date, payer, amount, method, memo] = row;
-      return mkIncome(`retreat1_fee_${i + 1}`, date, '회비', payer, amount, method === 'QR' ? '계좌이체' : '현금', memo);
-    });
-
-    // 후원 (날짜가 엑셀에 없어 수련회 기간 첫날 날짜로, 결제수단도 명시가
-    // 없어 계좌이체로 가정 — 실제와 다르면 나중에 수정 가능)
-    const SPONSOR_ROWS = [
-      ['김태준', 500],
-      ['바자회', 650, '여전도회'],
-      ['지경섭 집사님', 150],
-      ['고수영 목사님', 1000],
-      ['서연우 자매 어머니', 800, '금액 확인 필요(엑셀 원본 메모)'],
-      ['임창현 친구', 150],
-      ['정진석 집사님', 200],
-      ['엄철규 장로님', 500],
-      ['이현택 장로님', 300],
-      ['최민혁 장로님', 500],
-      ['류은영 권사님', 300]
-    ];
-    const sponsorTxns = SPONSOR_ROWS.map((row, i) => {
-      const [payer, amount, memo] = row;
-      return mkIncome(`retreat1_sponsor_${i + 1}`, '2026-04-30', '후원금', payer, amount, '계좌이체', memo);
-    });
-    const churchTxn = mkIncome('retreat1_church', '2026-04-30', '후원금', '교회(지원금)', 2000, '계좌이체', '교회 지원금');
-
-    // 구매 내역 88건을 하나로 뭉침 (리더단 회의비 7건/RM348은 제외)
-    const expenseTxn = {
-      id: 'tx_' + uid(),
-      date: '2026-04-30',
-      type: 'expense',
-      source: 'manual',
-      account: 'youth',
-      tag: 'youth-general',
-      category: '행사비',
-      item: '1차 수련회',
-      vendor: '',
-      payment: '카드',
-      channel: channelToBucket('계좌이체'),
-      amount: 6992.82,
-      memo: '1차 수련회(4/30~5/2) 구매 내역 88건 합산 (숙박/식비/액티비티/조모임 지원금 등). "리더단 회의비" 7건(RM348)은 엑셀 원본에도 별도항목/후원 포함 제외로 표시되어 제외함.',
-      author: '임창현',
-      receiptUrl: null,
-      externalId: 'retreat1_expense',
-      createdAt: now
-    };
-
-    const allNew = [...feeTxns, ...sponsorTxns, churchTxn, expenseTxn];
-    db.saveTransactions(__txns.concat(allNew));
-
-    const b = computeAccountBreakdown('youth');
-    const settlements = db.getSettlements();
-    settlements.push({
-      id: 'settle_retreat1_20261120',
-      date: '2026-04-30',
-      account: 'youth',
-      cash: b.current.cash,
-      tng: b.current.tng,
-      bank: b.current.bank,
-      total: b.current.total,
-      source: 'manual',
-      memo: '1차 수련회 재정 반영 (회비 19건/후원 11건+교회지원금/구매내역 합산 1건)',
-      createdAt: now
-    });
-    db.saveSettlements(settlements);
-    console.log('[youth-budget] applied SEED_RETREAT1_20261120 migration:', allNew.length, 'transactions added');
-  }
-}
-
-// One-time seed: 임창현님 개인 "회비 납부 내역" 엑셀(수련회와 별개로, 4~11월
-// 매달 걷은 회비 + 그 돈으로 치른 토요모임/아웃팅 등 일반 운영비) — "내
-// 개인 운영장부가 즉 청년부 재정 장부"라는 확인에 따라 전부 account='youth'
-// 수동 건별 입력으로 반영한다. 날짜는 실제 거래일 그대로, 회비 성격이
-// 아닌 2건(카페 아웃팅지원 2000, 윤수빈 편 임혜란 집사님 후원 300)과
-// 회비·후원이 섞여 있던 1건(여사무엘 150 = 회비 50 + 수련회후원 100)은
-// 후원금으로 성격을 바로잡아 분리했다. 현금 유무 안내("현금을 은행으로
-// 다 옮길 걸로 쳐줘")에 따라 QR/Cash 구분 없이 전부 계좌이체(은행)로
-// 반영. 이미 수동으로 들어가 있던 2건(11/14 돈까스랩 348, 11/18 꽃구매
-// 98)은 중복 방지를 위해 제외. 멱등 — externalId가 'youthledger_'로
-// 시작하는 거래가 이미 있으면 다시 넣지 않음.
-if (process.env.SEED_YOUTH_LEDGER_20261120 === '1') {
-  const __txns2 = db.getTransactions();
-  if (!__txns2.some((t) => t.externalId && t.externalId.startsWith('youthledger_'))) {
-    const now2 = new Date().toISOString();
-    const mkI = (externalId, date, category, payer, amount, memo) => ({
-      id: 'tx_' + uid(),
-      date,
-      type: 'income',
-      source: category === '회비' ? 'membership' : 'manual',
-      account: 'youth',
-      tag: 'youth-general',
-      category,
-      item: `${category} - ${payer}`,
-      payer,
-      receiveChannel: '계좌이체',
-      channel: 'bank',
-      amount,
-      memo: memo || '',
-      author: '임창현',
-      externalId,
-      createdAt: now2
-    });
-    const mkE = (externalId, date, category, item, amount, memo) => ({
-      id: 'tx_' + uid(),
-      date,
-      type: 'expense',
-      source: 'manual',
-      account: 'youth',
-      tag: 'youth-general',
-      category,
-      item,
-      vendor: '',
-      payment: '카드',
-      channel: 'bank',
-      amount,
-      memo: memo || '',
-      author: '임창현',
-      receiptUrl: null,
-      externalId,
-      createdAt: now2
-    });
-
-    // 회비 (72건) — 엑셀 원본의 QR/Cash 구분은 전부 은행으로 통일
-    const FEE_ROWS2 = [
-      ['2026-04-03', '김보민', 50], ['2026-04-04', '김정국', 50], ['2026-04-04', '핼리', 50],
-      ['2026-04-04', '여사무엘', 50], ['2026-04-04', '오찬영', 50], ['2026-04-08', '황나엘', 50],
-      ['2026-04-18', '윤수빈', 50], ['2026-04-18', '전용준 집사님', 50], ['2026-04-18', '배현아', 50],
-      ['2026-04-18', '강은수', 50], ['2026-04-18', '전소윤', 50], ['2026-04-18', '원가온', 50],
-      ['2026-04-19', '김정음', 50], ['2026-04-19', '임창현', 50], ['2026-04-19', '김우제', 50],
-      ['2026-04-26', '최원준', 50],
-      ['2026-05-15', '오찬영', 50], ['2026-05-15', '박세희', 50], ['2026-05-16', '윤수빈', 50],
-      ['2026-05-16', '홍서희', 50], ['2026-05-16', '여사무엘', 50], ['2026-05-16', '임창현', 50],
-      ['2026-05-23', '한윤서', 50], ['2026-05-23', '김영규', 50], ['2026-05-23', '최원준', 50],
-      ['2026-05-23', '강은수', 50], ['2026-05-30', '원가온', 50], ['2026-06-28', '배현아', 50],
-      ['2026-06-25', '원가온', 50], ['2026-06-26', '김보민', 50], ['2026-06-26', '황나엘', 50],
-      ['2026-06-27', '홍서희', 50], ['2026-06-28', '김영규', 50],
-      ['2026-07-04', '배현아', 50], ['2026-07-04', '박규리', 50], ['2026-07-04', '윤수빈', 50],
-      ['2026-07-04', '박세희', 50], ['2026-07-06', '김우제', 100], ['2026-07-06', '김정음', 150],
-      ['2026-07-06', '최원준', 50], ['2026-07-06', '임창현', 50],
-      ['2026-07-23', '이재아', 100], ['2026-07-23', '오찬영', 50], ['2026-07-23', '박세희', 50],
-      ['2026-07-23', '유재신', 50], ['2026-07-23', '서제민', 50], ['2026-07-26', '조하영', 100],
-      ['2026-07-26', '김우제', 50], ['2026-07-26', '원가온', 50], ['2026-07-27', '한윤서', 50],
-      ['2026-07-27', '임창현', 50], ['2026-08-01', '윤수빈', 50], ['2026-08-01', '황나엘', 50],
-      ['2026-09-02', '한윤서', 50], ['2026-09-02', '임창현', 50],
-      ['2026-09-20', '임창현', 50], ['2026-09-29', '김보민', 50], ['2026-10-01', '윤수빈', 50],
-      ['2026-10-03', '한윤서', 50],
-      ['2026-10-10', '조하영', 50], ['2026-10-10', '황나엘', 100], ['2026-11-01', '황나엘', 50],
-      ['2026-10-29', '윤수빈', 120], ['2026-11-01', '문혜성', 70], ['2026-11-01', '김보민', 70],
-      ['2026-11-01', '정햇살', 70], ['2026-11-04', '원가온', 70], ['2026-11-07', '최원준', 70],
-      ['2026-11-08', '조한나', 50], ['2026-11-09', '전소윤', 70], ['2026-11-09', '김근태', 70],
-      ['2026-11-09', '전용준', 70]
-    ];
-    const feeTxns2 = FEE_ROWS2.map((row, i) => {
-      const [date, payer, amount] = row;
-      return mkI(`youthledger_fee_${i + 1}`, date, '회비', payer, amount);
-    });
-
-    // 성격 수정: 회비가 아니라 후원금인 3건
-    const sponsorTxns2 = [
-      mkI('youthledger_sponsor_1', '2026-05-16', '후원금', '여사무엘', 100, '수련회 후원 (원본 150 중 회비 50 분리, 나머지 100)'),
-      mkI('youthledger_sponsor_2', '2026-10-25', '후원금', '카페', 2000, '아웃팅 지원'),
-      mkI('youthledger_sponsor_3', '2026-11-09', '후원금', '임혜란 집사님', 300, '윤수빈 편으로 전달')
-    ];
-
-    // 일반 운영 지출 23건 (엑셀 25건 중 이미 수동입력돼 있던 2건
-    // (11/14 돈까스랩 348, 11/18 꽃구매·전용준집사 98)은 중복이라 제외)
-    const EXPENSE_ROWS2 = [
-      ['2026-05-16', '식비·다과', '토요모임 - 5/16 저녁 쿠시야', 477.0],
-      ['2026-05-30', '행사비', '액티비티 - 배드민턴 대여', 66.78],
-      ['2026-05-30', '행사비', '액티비티 - 배드민턴 채 대여', 40.0],
-      ['2026-05-30', '식비·다과', '액티비티 - 음료수 구매', 51.9],
-      ['2026-05-30', '식비·다과', '액티비티 - 밥값 / 스끼시', 558.9],
-      ['2026-06-20', '행사비', '외부강사 - 여경진 목사님 방문', 300.0],
-      ['2026-07-04', '식비·다과', '토요모임 - 7/4 저녁 만나도시락', 442.0],
-      ['2026-07-11', '식비·다과', '토요모임 - 솥밥', 714.55],
-      ['2026-07-12', '행사비', '집들이 - 찬영&우제', 200.0],
-      ['2026-09-06', '식비·다과', '일요모임 - 청년집회 / 왕족족발', 452.4],
-      ['2026-09-19', '식비·다과', '토요모임 - 저녁 만나도시락', 322.0],
-      ['2026-10-30', '행사비', '아웃팅 - 에어비앤비(예약번호 HMZSMZJCRT)', 1030.0],
-      ['2026-11-07', '식비·다과', '토요모임 - 만나도시락', 297.0],
-      ['2026-11-07', '행사비', '아웃팅 - 빌리지그로서', 307.7],
-      ['2026-11-07', '행사비', '아웃팅 - 이온 슈퍼마켓(타만말루리점)', 74.3],
-      ['2026-11-07', '행사비', '아웃팅 - KK수퍼마트(겐팅점)', 20.9],
-      ['2026-11-07', '행사비', '아웃팅 - 맥도날드(페트론 주유소점) / 겐팅하이랜드', 87.15],
-      ['2026-11-09', '행사비', '아웃팅 - 최원준/2명', 28.0],
-      ['2026-11-09', '행사비', '아웃팅 - 한윤서/2명', 28.0],
-      ['2026-11-09', '행사비', '아웃팅 - 임창현/3명', 42.0],
-      ['2026-11-09', '행사비', '아웃팅 - 전용준/4명', 56.0],
-      ['2026-11-09', '식비·다과', '아웃팅_점심 - 수끼야', 558.9],
-      ['2026-11-15', '기타', '꽃 구매 - 정햇살/입교', 108.0]
-    ];
-    const expenseTxns2 = EXPENSE_ROWS2.map((row, i) => {
-      const [date, category, item, amount] = row;
-      return mkE(`youthledger_expense_${i + 1}`, date, category, item, amount);
-    });
-
-    const allNew2 = [...feeTxns2, ...sponsorTxns2, ...expenseTxns2];
-    db.saveTransactions(__txns2.concat(allNew2));
-    console.log('[youth-budget] applied SEED_YOUTH_LEDGER_20261120 migration:', allNew2.length, 'transactions added',
-      `(회비 ${feeTxns2.length} / 후원금 ${sponsorTxns2.length} / 지출 ${expenseTxns2.length})`);
-  }
-}
-
 // "청년부 재정은 현금이 없고 다 은행이다" / "현금을 은행으로 다 옮길 걸로
 // 쳐줘" / "다 현금 말고 은행으로 잡아줘" — 청년부 계좌(account='youth')
-// 거래 중 channel이 'cash'(현금)·'tng'(터치앤고)로 잡혀 있는 건(주로
-// 수련회 회비 중 Cash로 낸 건들)을 전부 bank(은행)로 바꾼다. 표시용
-// 라벨(receiveChannel/payment)도 같이 맞춘다. 카페 계좌는 실제로 카페
-// 서랍에 현금이 있으므로 건드리지 않는다. 위의 수련회/회비장부 시드보다
-// 반드시 뒤에 와야 한다(새로 시드되는 Cash 건까지 다 잡아야 하므로).
+// 거래 중 channel이 'cash'(현금)·'tng'(터치앤고)로 잡혀 있는 건을 전부
+// bank(은행)로 바꾼다. 표시용 라벨(receiveChannel/payment)도 같이
+// 맞춘다. 카페 계좌는 실제로 카페 서랍에 현금이 있으므로 건드리지 않는다.
 // 이미 bank인 건 다시 안 건드리므로(멱등) env 게이트 없이 상시 적용.
 (function forceYouthChannelToBank() {
   const txns = db.getTransactions();
@@ -926,163 +345,9 @@ if (process.env.SEED_YOUTH_LEDGER_20261120 === '1') {
   }
 })();
 
-// "청년부는 전체가 계좌에 있어 / 내가 그때그때 계좌로 넣어" — "실제 잔액
-// 구성"에 남아있던 현금/터치앤고 분량은, 과거(계좌분리 이전) 기준점
-// 정산이 물려준 숫자일 뿐 실제로는 임창현님이 그때그때 다 은행에 입금해둔
-// 돈이라는 확인. 총액(RM)은 그대로 두고 현금/TnG를 전부 계좌로 합쳐
-// 새 기준점을 오늘 날짜로 다시 찍는다 — 총액을 추측/변경하지 않고,
-// 지금 이 순간의 실제 잔액 구성 계산값을 그대로 가져와 cash/tng만
-// bank로 옮겨 담는다. 멱등 — 고정 id(settle_youth_allbank_20261120)가
-// 이미 있으면 다시 안 만듦.
-if (process.env.RESET_YOUTH_BASELINE_TO_BANK_20261120 === '1') {
-  const settlements3 = db.getSettlements();
-  if (!settlements3.some((s) => s.id === 'settle_youth_allbank_20261120')) {
-    const b = computeAccountBreakdown('youth');
-    const now3 = new Date().toISOString();
-    settlements3.push({
-      id: 'settle_youth_allbank_20261120',
-      date: now3.slice(0, 10),
-      account: 'youth',
-      cash: 0,
-      tng: 0,
-      bank: b.current.total,
-      total: b.current.total,
-      source: 'manual',
-      memo: `청년부는 현금 없이 전부 은행 — 실제 잔액 구성의 현금(${b.current.cash})/터치앤고(${b.current.tng})를 계좌로 합산해 새 기준점으로 기록 (총액 ${b.current.total}은 그대로 유지)`,
-      createdAt: now3
-    });
-    db.saveSettlements(settlements3);
-    console.log('[youth-budget] applied RESET_YOUTH_BASELINE_TO_BANK_20261120:', JSON.stringify(b.current), '-> cash:0, tng:0, bank:' + b.current.total);
-  }
-}
-
-// "대시보드 잔액과 실제 잔액 구성이 같아야지" — "청년부 잔액(장부 기준)"
-// RM2,378과 "실제 잔액 구성" RM19,820이 안 맞는 근본 원인은, 계좌분리
-// 이전(2026-11-14)에 찍힌 정산 2건(settle_seed0001, settle_cardfix20261114)
-// 이 account 필드가 없어 기본값으로 'youth'에 귀속되면서, 사실은
-// 카페+청년부가 합쳐져 있던 당시의 큰 금액을 전부 청년부 몫인 것처럼
-// "실제 잔액 구성"의 기준점으로 물려받았기 때문 — 위의
-// RESET_YOUTH_BASELINE_TO_BANK 마이그레이션도 그 잘못된 숫자를 그대로
-// 계좌로만 옮겼을 뿐 근본 원인은 못 고쳤다. 지금은 청년부 거래가 전부
-// 건별로 제대로 들어가 있으므로(수련회+회비장부 이관 완료), 장부 기준
-// 합계(= "청년부 잔액")를 유일한 진실로 삼아 실제 잔액 구성의 기준점을
-// 오늘 날짜로 다시 찍는다 — cash:0, tng:0, bank:장부잔액. 카페 쪽
-// 정산은 전혀 건드리지 않는다. 멱등 — 고정 id가 이미 있으면 다시 안 만듦.
-if (process.env.RESET_YOUTH_BASELINE_TO_LEDGER_20261120 === '1') {
-  const settlements4 = db.getSettlements();
-  if (!settlements4.some((s) => s.id === 'settle_youth_ledgerfix_20261120')) {
-    const txns4 = db.getTransactions();
-    const ledgerBalance = txns4
-      .filter((t) => txnAccount(t) === 'youth')
-      .reduce((sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount), 0);
-    const now4 = new Date().toISOString();
-    settlements4.push({
-      id: 'settle_youth_ledgerfix_20261120',
-      date: now4.slice(0, 10),
-      account: 'youth',
-      cash: 0,
-      tng: 0,
-      bank: ledgerBalance,
-      total: ledgerBalance,
-      source: 'manual',
-      memo: `"청년부 잔액(장부 기준)"과 "실제 잔액 구성"이 어긋나 있던 근본 원인(2026-11-14 계좌분리 이전 정산 2건이 account 미지정으로 청년부에 잘못 귀속)을 바로잡음 — 장부 합계(${ledgerBalance})를 그대로 새 기준점으로 기록, 전부 계좌.`,
-      createdAt: now4
-    });
-    db.saveSettlements(settlements4);
-    console.log('[youth-budget] applied RESET_YOUTH_BASELINE_TO_LEDGER_20261120: ledgerBalance=' + ledgerBalance + ' -> cash:0, tng:0, bank:' + ledgerBalance);
-  }
-}
-
-// "정크 파일 지워줘" — 이제 더 이상 기준점으로 쓰이지 않는, 과거 오류의
-// 흔적인 청년부 정산 4건을 정리한다: (1) settle_retreat1_20261120 —
-// 수련회 시드 당시 잘못된 기준점을 그대로 물려받아 찍혔던 RM19,553짜리
-// 정산, (2) settle_youth_allbank_20261120 — RESET_YOUTH_BASELINE_TO_BANK
-// 단계에서 찍었던 RM19,820짜리 정산(장부기준 수정으로 완전히 대체됨),
-// (3)(4) 2026-11-14 계좌분리 이전, account 미지정으로 청년부에 잘못
-// 귀속됐던 원조 정산 2건(카페+청년부가 합쳐져 있던 당시 금액). 지금의
-// 유일한 기준점인 settle_youth_ledgerfix_20261120(오늘자, 장부기준)은
-// 그대로 둔다. 카페 쪽 정산은 전혀 건드리지 않음. 멱등 — 이미 지워졌으면
-// 아무것도 안 함.
-if (process.env.CLEANUP_JUNK_YOUTH_SETTLEMENTS_20261120 === '1') {
-  const settlements5 = db.getSettlements();
-  const toDelete = settlements5.filter((s) =>
-    s.id === 'settle_retreat1_20261120' ||
-    s.id === 'settle_youth_allbank_20261120' ||
-    (settlementAccount(s) === 'youth' && s.date === '2026-11-14')
-  );
-  if (toDelete.length) {
-    const keepIds = new Set(settlements5.map((s) => s.id).filter((id) => !toDelete.some((d) => d.id === id)));
-    const remaining = settlements5.filter((s) => keepIds.has(s.id));
-    db.saveSettlements(remaining);
-    console.log('[youth-budget] applied CLEANUP_JUNK_YOUTH_SETTLEMENTS_20261120: 삭제된 정크 정산',
-      toDelete.length + '건:', toDelete.map((s) => `${s.id}(${s.date}/RM${s.total})`).join(', '));
-  }
-}
-
-// 읽기 전용 진단: "2026-11-18 청년부 자동반영" 정산이 사실 카페 숫자처럼
-// 보인다는 제보 확인용 — 현재 남아있는 정산 전체를 날짜순으로 덤프.
-// 아무것도 바꾸지 않음. DIAG_SETTLEMENTS_20261120=1일 때만.
-if (process.env.DIAG_SETTLEMENTS_20261120 === '1') {
-  const allSettle = db.getSettlements().slice().sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
-  console.log('[diag] ===== 정산 전체 ' + allSettle.length + '건 (날짜순) =====');
-  allSettle.forEach((s) => {
-    console.log(`[diag]   ${s.date} | account=${settlementAccount(s)} | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | createdAt=${s.createdAt}`);
-  });
-}
-
-// "꽃 구매가 청년부였는데... 이거 카페지..." — 2026-11-18에 꽃 구매(RM98,
-// 청년부 지출)가 저장되면서 자동으로 찍힌 "청년부 자동반영" 정산
-// (settle_mwlldaxdccg0l1, cash=1513.85/tng=1414.8/bank=14992.6)은, 그
-// 시점에 아직 source=cafe 거래들이 account='youth'로 잘못 덮어써져 있던
-// (오늘 고친) 버그 때문에, 실제로는 카페 전체 숫자가 거의 그대로 "청년부"
-// 라벨을 달고 찍힌 것 — 카페의 11/16 정산(cash=1513.85/tng=1414.8/
-// bank=15090.6)과 거의 동일하고 차이(bank 98)가 정확히 그 꽃 구매 금액과
-// 일치하는 게 그 증거. 지금은 더 이상 기준점으로도 안 쓰이는 죽은
-// 데이터라 혼란만 주므로 삭제. 멱등 — 고정 id 매칭.
-if (process.env.DELETE_STALE_YOUTH_AUTO_SETTLEMENT_20261120 === '1') {
-  const settlements6 = db.getSettlements();
-  const before = settlements6.length;
-  const remaining6 = settlements6.filter((s) => s.id !== 'settle_mwlldaxdccg0l1');
-  if (remaining6.length !== before) {
-    db.saveSettlements(remaining6);
-    console.log('[youth-budget] applied DELETE_STALE_YOUTH_AUTO_SETTLEMENT_20261120: settle_mwlldaxdccg0l1 삭제');
-  }
-}
-
-// 변경이력(히스토리) 시드: 2026-11-20 세션에 코드 배포로 일괄 반영된
-// 이관/수정 작업들을 관리자 "변경이력" 화면에서 볼 수 있도록 기록한다.
-// 멱등 — id가 이미 있으면 다시 안 넣음.
-if (process.env.SEED_CHANGELOG_20261120 === '1') {
-  const log = db.getChangelog();
-  const existing = new Set(log.map((e) => e.id));
-  const CHANGELOG_ENTRIES = [
-    ['cl_20261120_1', '1차 수련회(4/30~5/2) 재정 이관', '엑셀 "세부내역" 탭 기준으로 회비 19건·후원 11건+교회지원금·구매내역(88건 중 리더단회의비 7건/RM348 제외) 1건으로 합산 반영. 총 32건.'],
-    ['cl_20261120_2', '집사님 카페 지출 53건 재태깅', '과거 집사님이 정리해 넘긴 카페 지출입금 53건(청년부 일반지출로 잡혀있던 것)을 카페 운영으로 재분류. 계좌는 원래도 카페라 안 바뀌고 태그만 바뀜.'],
-    ['cl_20261120_3', 'source=cafe 거래 계좌 강제 규칙 적용', '"소스가 카페면 카페 제정" 원칙에 따라 cafe-pos 동기화 거래는 예외 없이 계좌=카페·태그=카페운영으로 고정하는 상시 규칙 추가. 최초 적용 시 계좌 오분류 457건 수정.'],
-    ['cl_20261120_4', '회비 납부 내역(4~11월) 개인장부 이관', '임창현님 개인 "회비 납부 내역" 엑셀을 청년부 재정에 건별 반영 — 회비 72건(RM4,130), 후원금 3건(RM2,400, 성격 수정분 포함: 여사무엘 150→회비50+후원100 분리, 카페 아웃팅지원 2000, 임혜란 집사님 300), 일반운영 지출 23건(RM6,263.48, 이미 입력된 2건 제외).'],
-    ['cl_20261120_5', '청년부 계좌 현금/TnG → 은행 통일', '"청년부 재정은 현금 없이 다 은행" 확인에 따라 청년부 계좌 거래의 channel이 현금/터치앤고로 남아있던 건(수련회 회비 중 Cash 4건)을 전부 은행으로 재지정하는 상시 규칙 추가.'],
-    ['cl_20261120_6', '청년부 실제잔액 기준점 재설정(현금/TnG→계좌)', '"실제 잔액 구성"에 남아있던 현금(1,529)/터치앤고(1,000)를 계좌로 합산한 새 기준점 정산을 오늘 날짜로 기록. 총액(RM19,820)은 변경 없이 유지, 구성만 전부 계좌로 재분류. 카페 쪽 정산은 그대로 둠.'],
-    ['cl_20261120_7', '전체 오류 검증 통과', '거래 id/externalId 중복, 금액·타입·날짜·카테고리·태그 이상, 계좌별 채널 강제 적용, 정산 중복 등 12개 항목 전체 점검 — 문제 없음 확인.'],
-    ['cl_20261120_8', '청년부 실제잔액 ↔ 장부잔액 불일치 근본 수정', '"청년부 잔액(장부 기준)"과 "실제 잔액 구성"이 어긋나던 근본 원인(2026-11-14 계좌분리 이전 정산 2건이 account 미지정으로 청년부에 잘못 귀속)을 찾아, 장부 합계를 그대로 새 기준점(전부 계좌)으로 재설정 — 이제 두 숫자가 항상 일치함. 카페 쪽 정산은 그대로 둠.'],
-    ['cl_20261120_9', '정크 정산 4건 삭제 + 정산 폼에 계좌 선택 추가', '더 이상 기준점으로 쓰이지 않는 과거 오류 정산 4건(RM19,553/RM19,820/2026-11-14 2건)을 정리. "실제 잔액 기준점 다시 맞추기" 폼에 계좌(청년부/카페) 선택 드롭다운 추가 — 지금까지는 청년부 고정이었음.'],
-    ['cl_20261120_10', '정크 정산 1건 추가 삭제 (11/18 청년부 자동반영)', '꽃 구매(RM98) 저장 시 자동 찍혔던 2026-11-18 "청년부" 정산이, 당시 아직 안 고쳐져 있던 계좌 버그 때문에 사실상 카페 전체 숫자를 그대로 담고 있던 것으로 확인돼 삭제. 이제 정산은 청년부 1건(오늘자, 장부기준)·카페 1건(11/16, 카페 자동)만 남음.']
-  ];
-  let added = 0;
-  CHANGELOG_ENTRIES.forEach(([id, title, detail]) => {
-    if (existing.has(id)) return;
-    log.push({ id, date: '2026-11-20', title, detail, createdAt: new Date().toISOString() });
-    added += 1;
-  });
-  if (added) {
-    db.saveChangelog(log);
-    console.log('[youth-budget] applied SEED_CHANGELOG_20261120:', added, 'entries added');
-  }
-}
-
-// 읽기 전용 전체 오류 검증: 이번 세션에 적용한 여러 마이그레이션(카페 재태깅,
-// source=cafe 계좌 강제, 회비 장부 시드, 은행 채널 통일) 이후 데이터 전체가
-// 일관적인지 한 번에 점검한다. 아무것도 바꾸지 않음.
-// FULL_VALIDATION_20261120=1일 때만 실행.
+// 읽기 전용 전체 오류 검증 — 거래/정산 데이터 전체가 일관적인지(중복,
+// 이상값, 계좌/채널 규칙 위반 등) 언제든 다시 점검할 수 있는 상시 진단.
+// 아무것도 바꾸지 않음. FULL_VALIDATION_20261120=1일 때만 실행.
 if (process.env.FULL_VALIDATION_20261120 === '1') {
   const txns = db.getTransactions();
   const settlements = db.getSettlements();
@@ -1112,8 +377,10 @@ if (process.env.FULL_VALIDATION_20261120 === '1') {
   if (badType.length) problems.push(`type이 income/expense가 아닌 거래 ${badType.length}건: ${badType.slice(0, 5).map((t) => t.id + '(' + t.type + ')').join(', ')}`);
   else console.log('[check] type(income/expense) 이상: 없음');
 
-  // 5) 날짜 형식(YYYY-MM-DD) 이상 또는 오늘(2026-11-20) 이후 미래 날짜
-  const TODAY = '2026-11-20';
+  // 5) 날짜 형식(YYYY-MM-DD) 이상 또는 오늘 이후 미래 날짜 — 하드코딩된
+  // 날짜 문자열이었던 걸 todayStr()로 바꿈(예전 값 그대로면 하루만 지나도
+  // 모든 "오늘" 거래가 "미래 날짜"로 잘못 걸림).
+  const TODAY = todayStr();
   const badDate = txns.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t.date || ''));
   const futureDate = txns.filter((t) => /^\d{4}-\d{2}-\d{2}/.test(t.date || '') && t.date > TODAY);
   if (badDate.length) problems.push(`날짜 형식 이상 ${badDate.length}건: ${badDate.slice(0, 5).map((t) => t.id).join(', ')}`);
@@ -1157,9 +424,12 @@ if (process.env.FULL_VALIDATION_20261120 === '1') {
   else console.log('[check] 청년부 계좌 중 bank 아닌 거래: 없음 (현금/TnG 통일 마이그레이션 정상 적용)');
 
   // 11) 카페 소스인데 계좌/태그가 여전히 안 맞는 거래 (강제 마이그레이션 검증)
-  const cafeSrcBad = txns.filter((t) => t.source === 'cafe' && (t.account !== 'cafe' || t.tag !== 'cafe-ops'));
-  if (cafeSrcBad.length) problems.push(`source=cafe인데 account/tag 불일치 ${cafeSrcBad.length}건: ${cafeSrcBad.slice(0, 5).map((t) => `${t.id}(${t.account}/${t.tag})`).join(', ')}`);
-  else console.log('[check] source=cafe 계좌/태그 강제 적용: 정상');
+  // tag는 더 이상 반드시 'cafe-ops'일 필요 없음 — 관리자가 손으로
+  // needs-review/youth-general로 재분류했을 수 있으므로, 여기서는 account만
+  // 엄격히 체크하고 tag는 "비어있지 않은지"만 확인한다.
+  const cafeSrcBad = txns.filter((t) => t.source === 'cafe' && (t.account !== 'cafe' || !t.tag));
+  if (cafeSrcBad.length) problems.push(`source=cafe인데 account 불일치 또는 tag 없음 ${cafeSrcBad.length}건: ${cafeSrcBad.slice(0, 5).map((t) => `${t.id}(${t.account}/${t.tag})`).join(', ')}`);
+  else console.log('[check] source=cafe 계좌 강제 적용 및 tag 존재: 정상');
 
   // 12) 정산(settlement) id 중복 및 account 미해석
   const settleIdCounts = {};
@@ -1216,7 +486,7 @@ app.get('/api/receive-channels', (req, res) => {
 // cafe-pos doesn't record a payment method for those) can't be placed in
 // any bucket and are called out separately so the gap is visible instead
 // of silently wrong.
-function computeAccountBreakdown(account) {
+function computeAccountBreakdown(account, { excludeCafeSynced = false } = {}) {
   // Only a real physical-count baseline (manual entry or the cafe-pos
   // settlement webhook) is used as the anchor — never an "auto" row, which
   // is just a snapshot of this same calculation at an earlier moment. If an
@@ -1239,6 +509,12 @@ function computeAccountBreakdown(account) {
   let cash = 0, tng = 0, bank = 0, unattributedCount = 0, unattributedAmount = 0;
   txns.forEach((t) => {
     if (baselineCreatedAt && t.createdAt <= baselineCreatedAt) return; // already reflected in the baseline count
+    // excludeCafeSynced: used only by the cafe-settlement webhook, to avoid
+    // double-counting cafe-pos sales/expenses that were ALSO already
+    // individually imported as transactions (source='cafe') by the manual
+    // "카페에서 새 내역 가져오기" button — see the comment at the webhook
+    // handler below for the full double-count scenario this prevents.
+    if (excludeCafeSynced && t.source === 'cafe') return;
     const signed = t.type === 'income' ? t.amount : -t.amount;
     if (t.channel === 'cash') cash += signed;
     else if (t.channel === 'tng') tng += signed;
@@ -1366,11 +642,42 @@ async function doPerformCafeSync({ skipAutoSettlement = false, fullRescan = fals
   const fetchSince = fullRescan ? { lastOrderAt: null, lastExpenseCreatedAt: null } : settings.cafeSync;
   const { newTxns, lastOrderAt, lastExpenseCreatedAt } = await syncCafe({ baseUrl, user, pass, since: fetchSince });
 
-  const txns = db.getTransactions();
+  let txns = db.getTransactions();
+  let purgedIds = new Set();
+  if (fullRescan) {
+    // 수입 동기화 행은 "그 날짜/채널/품목으로 묶인 주문 id 목록"을 해시해서
+    // externalId를 만드는데(lib/cafeSync.js), fullRescan은 커서 없이 카페의
+    // 주문 전체를 다시 긁어오므로 그 묶음(어떤 주문들이 한 그룹에 들어가는지)
+    // 자체가 지난번(부분 동기화 때)과 달라질 수 있다 — 그 사이 같은
+    // 날짜/채널/품목으로 주문이 더 들어왔다면 그룹 구성이 달라져서 새
+    // externalId가 기존 것과 안 맞고, 기존 행은 안 지워진 채 겹치는
+    // 금액이 또 하나 추가되는 이중계산이 날 수 있었다("빠진 내역 전체
+    // 복구"가 매번 눌러도 안전하다던 전제가 사실은 깨져 있던 지점). 이를
+    // 막기 위해 fullRescan에서는 기존 cafe-pos 수입 동기화 행을 전부 지우고
+    // 지금 막 다시 계산한 완전한 묶음으로 통째로 교체한다 — "지금 카페
+    // 주문 전체 기준으로 다시 그리기"이므로 항상 멱등하다. 지출(expense)
+    // 동기화 행은 주문 묶음이 아니라 cafe-pos 지출 1건=1행으로 고정
+    // externalId라 이 문제가 없어 그대로 둔다.
+    txns.forEach((t) => {
+      if (t.source === 'cafe' && t.type === 'income' && (t.externalId || '').startsWith('cafepos_income_')) {
+        purgedIds.add(t.id);
+      }
+    });
+    if (purgedIds.size) txns = txns.filter((t) => !purgedIds.has(t.id));
+  }
+
   const existingIds = new Set(txns.map((t) => t.externalId).filter(Boolean));
   const toAdd = newTxns.filter((t) => !existingIds.has(t.externalId));
   toAdd.forEach((t) => txns.push(t));
   db.saveTransactions(txns);
+
+  if (purgedIds.size) {
+    // 지운 행들이 남겨놓은 auto 정산 스냅샷도 같이 정리 — 숫자엔 영향 없지만
+    // (auto는 기준점으로 안 쓰임) 고아 이력이 쌓이지 않도록.
+    const settlementsAfterPurge = db.getSettlements();
+    const keptAfterPurge = settlementsAfterPurge.filter((s) => !purgedIds.has(s.txnId));
+    if (keptAfterPurge.length !== settlementsAfterPurge.length) db.saveSettlements(keptAfterPurge);
+  }
 
   // Only ever move the cursor forward. On a normal sync this is a no-op
   // (lastOrderAt/lastExpenseCreatedAt already come out >= the saved
@@ -1556,15 +863,23 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
       const appliedBankIncrease = bankIncrease - (existing ? existing.bankIncrease || 0 : 0);
 
       // Snapshot the current balance BEFORE the sync below touches the
-      // ledger. The increases above (from cafe-pos) already account for
-      // every order since cafe-pos's last settlement, including the ones
-      // about to be synced in as transactions — so this has to be the
-      // pre-sync figure, or those orders would get counted twice (once via
-      // the increase, once via their own channel delta once synced in).
-      // This is the CAFE account's own balance, not the combined total —
-      // cafe-pos's drawer/wallet counts have nothing to do with 청년부's own
+      // ledger, and with excludeCafeSynced:true — NOT just because of the
+      // sync about to run inside this same call, but because the manual
+      // "카페에서 새 내역 가져오기" button might ALREADY have individually
+      // imported some of these same orders/expenses (as source='cafe'
+      // transactions with their own channel) at any earlier point between
+      // settlements. cashIncrease/tngIncrease/bankIncrease always represent
+      // the FULL change over the whole settled window regardless of
+      // whether some of it was already synced in as transactions — so if
+      // `before` included those transactions' own channel deltas too, this
+      // settlement's increase would double-count them (once as live
+      // transaction deltas, once via the increase). Excluding source='cafe'
+      // here means cafe-pos sales/expenses are only ever counted once, via
+      // this authoritative increase — never twice via both paths. This is
+      // the CAFE account's own balance, not the combined total — cafe-pos's
+      // drawer/wallet counts have nothing to do with 청년부's own
       // cash/membership money, now that the two are fully separate.
-      const before = computeAccountBreakdown('cafe').current;
+      const before = computeAccountBreakdown('cafe', { excludeCafeSynced: true }).current;
       const cash = before.cash + appliedCashIncrease;
       const tng = before.tng + appliedTngIncrease;
       const bank = before.bank + appliedBankIncrease;
@@ -1631,12 +946,6 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
 
 // ---------------- Admin-only API ----------------
 app.use('/api/admin', maybeRequireAdmin);
-
-// 변경이력(변경이력/이관 작업 감사 로그) — 최신순.
-app.get('/api/admin/changelog', (req, res) => {
-  const log = db.getChangelog().slice().sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-  res.json(log);
-});
 
 app.post('/api/admin/transactions', (req, res) => {
   const { date, type, source, tag, category, item, amount, memo, author, channel, account } = req.body || {};

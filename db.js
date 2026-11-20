@@ -79,11 +79,5 @@ module.exports = {
   saveSettlements: (settlements) => writeJSON('settlements', settlements),
 
   getSettings: () => Object.assign({}, DEFAULT_SETTINGS, readJSON('settings', DEFAULT_SETTINGS)),
-  saveSettings: (settings) => writeJSON('settings', settings),
-
-  // 변경이력(changelog): 코드 배포로 일괄 반영된 마이그레이션/데이터 이관
-  // 작업의 기록. 일반 거래(transactions)와 달리 "무엇을, 왜, 몇 건" 바꿨는지
-  // 설명하는 관리자 전용 감사 로그. { id, date, title, detail, createdAt }
-  getChangelog: () => readJSON('changelog', []),
-  saveChangelog: (entries) => writeJSON('changelog', entries)
+  saveSettings: (settings) => writeJSON('settings', settings)
 };

@@ -958,7 +958,17 @@ function miniActionsHtml(id) {
 function miniSaveCancelHtml(id) {
   return `<button class="primary btn-small" data-rsave="${id}">저장</button><button class="ghost btn-small" data-rcancel="${id}">취소</button>`;
 }
-const esc = (s) => (s || '').replace(/"/g, '&quot;');
+// 거래 메모/품목/거래처 등은 사용자가 자유 입력한 텍스트라 그대로 HTML에
+// 꽂으면 깨지거나 저장형 XSS가 될 수 있다. 원래는 "만 이스케이프해서
+// (속성값 안에서 깨지는 것만 막고) <, >, &는 그대로 둬서 메모가 텍스트로
+// 보이는 자리(속성값이 아닌 곳)에서는 <script> 같은 걸 그대로 심을 수
+// 있었음 — 최종 검수 때 발견, 전부 이스케이프하도록 보강.
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
 
 function purchaseRowHtml(t) {
   return `<tr data-id="${t.id}">
@@ -1117,12 +1127,16 @@ function renderRecentLists() {
       <td class="row-actions"><button class="ghost btn-small" data-pairdel="${t.id}">삭제</button></td>
     </tr>`);
 
-  const CHANNEL_BUCKET_LABEL = { cash: '💵 현금', tng: '📱 터치앤고', bank: '🏦 은행' };
+  // 위쪽(990번째 줄)의 CHANNEL_BUCKET_LABEL과 이름이 같으면 헷갈리니(실제로
+  // 코드 검수 때 "중복 선언"으로 지적됨 — 문법 오류는 아니지만(스코프가
+  // 달라 그냥 가려짐) 같은 매핑을 두 군데서 따로 들고 있는 게 혼동의
+  // 소지였음) 이 화면 전용 이모지 라벨은 다른 이름을 쓴다.
+  const CHANNEL_BUCKET_LABEL_EMOJI = { cash: '💵 현금', tng: '📱 터치앤고', bank: '🏦 은행' };
   renderTransferPairTable('channelTransferRecentTable', 'channel-transfer', 6, (t, sibling) => `
     <tr data-id="${t.id}">
       <td>${t.date}</td>
       <td>${txAccountLabel(t)}</td>
-      <td>${CHANNEL_BUCKET_LABEL[t.channel] || t.channel} → ${sibling ? (CHANNEL_BUCKET_LABEL[sibling.channel] || sibling.channel) : ''}</td>
+      <td>${CHANNEL_BUCKET_LABEL_EMOJI[t.channel] || t.channel} → ${sibling ? (CHANNEL_BUCKET_LABEL_EMOJI[sibling.channel] || sibling.channel) : ''}</td>
       <td class="amount">${fmt(t.amount)}</td>
       <td>${esc(t.memo || '')}</td>
       <td class="row-actions"><button class="ghost btn-small" data-pairdel="${t.id}">삭제</button></td>
