@@ -520,6 +520,25 @@ if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
   }
 }
 
+// transfer/channel-transfer 쌍이 날짜·계좌·금액까지 똑같이 겹치는 게
+// 있는지(실수로 두 번 기록됐는지) 확인한다. 아무것도 바꾸지 않음.
+// DIAG_CHECK_TRANSFER_DUPES_20261121=1일 때만.
+if (process.env.DIAG_CHECK_TRANSFER_DUPES_20261121 === '1') {
+  const all7 = db.getTransactions();
+  const pairs7 = all7.filter((t) => (t.source === 'transfer' || t.source === 'channel-transfer') && t.type === 'expense');
+  console.log('[diag5] ===== transfer/channel-transfer 쌍 ' + pairs7.length + '건 =====');
+  pairs7.sort((a, b) => a.date.localeCompare(b.date)).forEach((t) => {
+    const sibling = all7.find((x) => x.transferId === t.transferId && x.id !== t.id);
+    console.log(`[diag5]   ${t.date} | source=${t.source} | account=${txnAccount(t)} | item="${t.item}" | ${t.amount} | channel=${t.channel}->${sibling ? sibling.channel : '?'} | transferId=${t.transferId} | txId=${t.id} | createdAt=${t.createdAt}`);
+  });
+  const key = (t) => `${t.date}|${txnAccount(t)}|${t.source}|${t.amount}|${t.channel}`;
+  const byKey = {};
+  pairs7.forEach((t) => { (byKey[key(t)] = byKey[key(t)] || []).push(t); });
+  const dupeKeys = Object.entries(byKey).filter(([, v]) => v.length > 1);
+  console.log('[diag5] 날짜/계좌/소스/금액/채널까지 겹치는 그룹: ' + dupeKeys.length + '건');
+  dupeKeys.forEach(([k, v]) => console.log('[diag5]   ' + k + ' -> ' + v.map((t) => t.id + '(transferId=' + t.transferId + ', createdAt=' + t.createdAt + ')').join(', ')));
+}
+
 // 윤수빈/임혜란 집사님 관련 거래를 전부 찾는다. 아무것도 바꾸지 않음.
 // DIAG_FIND_YOONSUBIN_20261121=1일 때만.
 if (process.env.DIAG_FIND_YOONSUBIN_20261121 === '1') {
