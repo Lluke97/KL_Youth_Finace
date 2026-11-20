@@ -801,6 +801,33 @@ if (process.env.RESET_YOUTH_BASELINE_TO_BANK_20261120 === '1') {
   }
 }
 
+// 변경이력(히스토리) 시드: 2026-11-20 세션에 코드 배포로 일괄 반영된
+// 이관/수정 작업들을 관리자 "변경이력" 화면에서 볼 수 있도록 기록한다.
+// 멱등 — id가 이미 있으면 다시 안 넣음.
+if (process.env.SEED_CHANGELOG_20261120 === '1') {
+  const log = db.getChangelog();
+  const existing = new Set(log.map((e) => e.id));
+  const CHANGELOG_ENTRIES = [
+    ['cl_20261120_1', '1차 수련회(4/30~5/2) 재정 이관', '엑셀 "세부내역" 탭 기준으로 회비 19건·후원 11건+교회지원금·구매내역(88건 중 리더단회의비 7건/RM348 제외) 1건으로 합산 반영. 총 32건.'],
+    ['cl_20261120_2', '집사님 카페 지출 53건 재태깅', '과거 집사님이 정리해 넘긴 카페 지출입금 53건(청년부 일반지출로 잡혀있던 것)을 카페 운영으로 재분류. 계좌는 원래도 카페라 안 바뀌고 태그만 바뀜.'],
+    ['cl_20261120_3', 'source=cafe 거래 계좌 강제 규칙 적용', '"소스가 카페면 카페 제정" 원칙에 따라 cafe-pos 동기화 거래는 예외 없이 계좌=카페·태그=카페운영으로 고정하는 상시 규칙 추가. 최초 적용 시 계좌 오분류 457건 수정.'],
+    ['cl_20261120_4', '회비 납부 내역(4~11월) 개인장부 이관', '임창현님 개인 "회비 납부 내역" 엑셀을 청년부 재정에 건별 반영 — 회비 72건(RM4,130), 후원금 3건(RM2,400, 성격 수정분 포함: 여사무엘 150→회비50+후원100 분리, 카페 아웃팅지원 2000, 임혜란 집사님 300), 일반운영 지출 23건(RM6,263.48, 이미 입력된 2건 제외).'],
+    ['cl_20261120_5', '청년부 계좌 현금/TnG → 은행 통일', '"청년부 재정은 현금 없이 다 은행" 확인에 따라 청년부 계좌 거래의 channel이 현금/터치앤고로 남아있던 건(수련회 회비 중 Cash 4건)을 전부 은행으로 재지정하는 상시 규칙 추가.'],
+    ['cl_20261120_6', '청년부 실제잔액 기준점 재설정(현금/TnG→계좌)', '"실제 잔액 구성"에 남아있던 현금(1,529)/터치앤고(1,000)를 계좌로 합산한 새 기준점 정산을 오늘 날짜로 기록. 총액(RM19,820)은 변경 없이 유지, 구성만 전부 계좌로 재분류. 카페 쪽 정산은 그대로 둠.'],
+    ['cl_20261120_7', '전체 오류 검증 통과', '거래 id/externalId 중복, 금액·타입·날짜·카테고리·태그 이상, 계좌별 채널 강제 적용, 정산 중복 등 12개 항목 전체 점검 — 문제 없음 확인.']
+  ];
+  let added = 0;
+  CHANGELOG_ENTRIES.forEach(([id, title, detail]) => {
+    if (existing.has(id)) return;
+    log.push({ id, date: '2026-11-20', title, detail, createdAt: new Date().toISOString() });
+    added += 1;
+  });
+  if (added) {
+    db.saveChangelog(log);
+    console.log('[youth-budget] applied SEED_CHANGELOG_20261120:', added, 'entries added');
+  }
+}
+
 // 읽기 전용 전체 오류 검증: 이번 세션에 적용한 여러 마이그레이션(카페 재태깅,
 // source=cafe 계좌 강제, 회비 장부 시드, 은행 채널 통일) 이후 데이터 전체가
 // 일관적인지 한 번에 점검한다. 아무것도 바꾸지 않음.
@@ -1342,6 +1369,12 @@ app.post('/api/webhook/cafe-settlement', async (req, res) => {
 
 // ---------------- Admin-only API ----------------
 app.use('/api/admin', maybeRequireAdmin);
+
+// 변경이력(변경이력/이관 작업 감사 로그) — 최신순.
+app.get('/api/admin/changelog', (req, res) => {
+  const log = db.getChangelog().slice().sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  res.json(log);
+});
 
 app.post('/api/admin/transactions', (req, res) => {
   const { date, type, source, tag, category, item, amount, memo, author, channel, account } = req.body || {};
