@@ -489,6 +489,37 @@ if (process.env.DIAG_YOUTH_SETTLEMENT_LIST_20261121 === '1') {
   console.log(`[diag2] ===== 합계: 수입 ${inc} / 지출 ${exp} / 순액 ${inc - exp} =====`);
 }
 
+// 1차 수련회 잔액(2,557.18) 중 부장집사님이 현금으로 보관 중이던
+// RM600을, 카페가 대신 청년부 계좌로 채워넣는 것으로 기록한다
+// (/api/admin/transfer와 동일한 구조: 카페=지출, 청년부=수입, 날짜는
+// 수련회 날짜 2026-04-30). 카페는 -600, 청년부는 +600, 전체(카페+청년부)
+// 합계는 변동 없음(계좌 간 이동일 뿐). transferId 고정 — 멱등.
+if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
+  const txns7 = db.getTransactions();
+  const transferId7 = 'xfer_deacon600_20261121';
+  if (!txns7.some((t) => t.transferId === transferId7)) {
+    const now7 = new Date().toISOString();
+    const memo7 = '1차 수련회 잔액 중 부장집사님이 현금 보관 중이던 RM600을 카페가 대신 청년부 계좌로 채워넣음(수련회 날짜 기준 소급)';
+    const outTxn7 = {
+      id: 'tx_' + uid(), date: '2026-04-30', type: 'expense', source: 'transfer',
+      account: 'cafe', tag: null, category: '청년부 후원', item: '청년부 후원/이체',
+      amount: 600, channel: channelToBucket('계좌이체'), memo: memo7, author: '주섬주섬청년부',
+      transferId: transferId7, externalId: null, createdAt: now7
+    };
+    const inTxn7 = {
+      id: 'tx_' + uid(), date: '2026-04-30', type: 'income', source: 'transfer',
+      account: 'youth', tag: 'youth-general', category: '카페 후원금', item: '카페 후원금',
+      amount: 600, channel: channelToBucket('계좌이체'), memo: memo7, author: '주섬주섬청년부',
+      transferId: transferId7, externalId: null, createdAt: now7
+    };
+    txns7.push(outTxn7, inTxn7);
+    db.saveTransactions(txns7);
+    recordAutoSettlement(outTxn7);
+    recordAutoSettlement(inTxn7);
+    console.log('[youth-budget] applied ADD_DEACON_600_CAFE_TRANSFER_20261121: 카페 -600 / 청년부 +600 (2026-04-30)');
+  }
+}
+
 // "집사님" 관련 거래(전체 소스/계좌 불문) + 금액 600 거래를 전부 찾는다.
 // 아무것도 바꾸지 않음. DIAG_FIND_DEACON_600_20261121=1일 때만.
 if (process.env.DIAG_FIND_DEACON_600_20261121 === '1') {
