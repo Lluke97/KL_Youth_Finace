@@ -376,6 +376,30 @@ if (process.env.CLEANUP_BAD_CAFE_SETTLEMENTS_20261116 === '1') {
   }
 })();
 
+// "청년부 재정은 현금이 없고 다 은행이다" / "현금을 은행으로 다 옮길 걸로
+// 쳐줘" / "다 현금 말고 은행으로 잡아줘" — 청년부 계좌(account='youth')
+// 거래 중 channel이 'cash'(현금)·'tng'(터치앤고)로 잡혀 있는 건(주로
+// 수련회 회비 중 Cash로 낸 건들)을 전부 bank(은행)로 바꾼다. 표시용
+// 라벨(receiveChannel/payment)도 같이 맞춘다. 카페 계좌는 실제로 카페
+// 서랍에 현금이 있으므로 건드리지 않는다. 이미 bank인 건 다시 안
+// 건드리므로(멱등) env 게이트 없이 상시 적용.
+(function forceYouthChannelToBank() {
+  const txns = db.getTransactions();
+  let changed = 0;
+  txns.forEach((t) => {
+    if (txnAccount(t) === 'youth' && (t.channel === 'cash' || t.channel === 'tng')) {
+      t.channel = 'bank';
+      if (t.receiveChannel) t.receiveChannel = '계좌이체';
+      if (t.payment) t.payment = '카드';
+      changed += 1;
+    }
+  });
+  if (changed) {
+    db.saveTransactions(txns);
+    console.log(`[youth-budget] 청년부 계좌 거래 중 현금/TnG로 잡혀있던 ${changed}건을 은행(bank)으로 재지정했습니다.`);
+  }
+})();
+
 // 읽기 전용 진단: "청년부 실제 잔액 구성"이 비정상적으로 커 보이는 원인과,
 // 청년부 계정으로 잘못 들어가 있을 수 있는 카페 관련 수동입력 거래를
 // 찾기 위해 현재 정산/거래 데이터를 로그로만 출력한다 (아무것도 바꾸지
