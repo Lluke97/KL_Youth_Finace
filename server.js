@@ -864,6 +864,17 @@ if (process.env.CLEANUP_JUNK_YOUTH_SETTLEMENTS_20261120 === '1') {
   }
 }
 
+// 읽기 전용 진단: "2026-11-18 청년부 자동반영" 정산이 사실 카페 숫자처럼
+// 보인다는 제보 확인용 — 현재 남아있는 정산 전체를 날짜순으로 덤프.
+// 아무것도 바꾸지 않음. DIAG_SETTLEMENTS_20261120=1일 때만.
+if (process.env.DIAG_SETTLEMENTS_20261120 === '1') {
+  const allSettle = db.getSettlements().slice().sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  console.log('[diag] ===== 정산 전체 ' + allSettle.length + '건 (날짜순) =====');
+  allSettle.forEach((s) => {
+    console.log(`[diag]   ${s.date} | account=${settlementAccount(s)} | source=${s.source} | cash=${s.cash} tng=${s.tng} bank=${s.bank} total=${s.total} | id=${s.id} | createdAt=${s.createdAt}`);
+  });
+}
+
 // 변경이력(히스토리) 시드: 2026-11-20 세션에 코드 배포로 일괄 반영된
 // 이관/수정 작업들을 관리자 "변경이력" 화면에서 볼 수 있도록 기록한다.
 // 멱등 — id가 이미 있으면 다시 안 넣음.
