@@ -1476,8 +1476,16 @@ app.get('/api/summary', (req, res) => {
 
 // Settlements (실제 현금/터치앤고/은행 잔액) — read-only, same access as the
 // rest of the dashboard.
+// 관리자 "정산" 탭은 "기준점을 손으로 다시 맞추는" 화면이라, 손으로 세거나
+// 카페 쪽 자동 동기화로 들어온 실제 기준점(source !== 'auto')만 보여준다.
+// 후원/이체·계좌 전환을 기록할 때마다 recordAutoSettlement()가 남기는
+// source='auto' 스냅샷은 computeAccountBreakdown()의 기준점으로도 쓰이지
+// 않는 단순 이력이라, 여기 섞여 보이면 "또 정크가 쌓였나" 하고 혼동만 준다
+// — 그래서 기본적으로 숨긴다(지우진 않음, 데이터는 남아있음).
 app.get('/api/settlements', (req, res) => {
-  const settlements = db.getSettlements().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const settlements = db.getSettlements()
+    .filter((s) => s.source !== 'auto')
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(settlements);
 });
 
