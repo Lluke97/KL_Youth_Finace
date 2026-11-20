@@ -432,6 +432,28 @@ if (process.env.DIAG_ACCOUNTS_20261120 === '1') {
   });
 }
 
+// 집사님이 정리해서 넘겨준 과거 카페 지출입금("집사님(정리본)") 53건이
+// tag=youth-general("청년부 일반지출")로 들어가 있던 걸 cafe-ops("카페
+// 운영")로 바꾼다. 내용은 실제로 청년부를 위해 쓴 카페 돈(식사 지원 등)이
+// 맞지만, 이미 카페 쪽 정산으로 마감된 금액이라 청년부 자체 장부와는
+// 분리해야 한다는 판단 — account는 원래도 'cafe'라 안 바뀜, tag만 바뀜.
+// 멱등 — 조건(source=cafe, tag=youth-general, 해당 작성자)에 맞는 게
+// 없으면 더 이상 할 일이 없으므로 재실행해도 안전.
+if (process.env.RETAG_DEACON_CAFE_EXPENSES_20261120 === '1') {
+  const txns = db.getTransactions();
+  let changed = 0;
+  txns.forEach((t) => {
+    if (t.source === 'cafe' && t.tag === 'youth-general' && t.author === '집사님(정리본)') {
+      t.tag = 'cafe-ops';
+      changed += 1;
+    }
+  });
+  if (changed) {
+    db.saveTransactions(txns);
+    console.log('[youth-budget] applied RETAG_DEACON_CAFE_EXPENSES_20261120 migration:', changed, '건을 cafe-ops로 재태깅');
+  }
+}
+
 // One-time seed: 2026년 4/30~5/2 "1차 수련회" 재정 내역 (별도로 관리되던
 // 엑셀 파일을 Finance로 이전). 회비/후원은 사람별로 각 건씩, 구매 내역은
 // 88건을 하나로 뭉쳐서 "행사비 - 1차 수련회"로 반영한다 ("ⓘ 리더단 회의비"

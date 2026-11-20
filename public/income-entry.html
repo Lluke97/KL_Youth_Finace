@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>입금 입력 - 주섬주섬 Finance</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#4f46e5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="주섬주섬 Finance">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
+<style>
+  .wrap { max-width: 480px; margin: 24px auto; padding: 0 16px; }
+  form.entry { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  /* 그리드 아이템은 기본 min-width:auto라 select 옵션 글자가 길면 그 칸이
+     자기 몫(1fr)보다 넓어지려 해서 옆 칸과 크기가 안 맞거나 겹쳐 보이던
+     원인 — min-width:0으로 1fr 몫만큼만 차지하게 강제 */
+  form.entry > div { min-width: 0; }
+  form.entry label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
+  form.entry input, form.entry select {
+    /* 16px 미만이면 iOS Safari가 포커스 시 화면을 자동 확대해버려서
+       ("입력창 틀어짐"의 주 원인) 16px로 고정 */
+    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 16px;
+    background: var(--card); color: var(--text); box-sizing: border-box;
+  }
+  form.entry .full { grid-column: 1 / -1; }
+  button.primary {
+    cursor: pointer; border: none; border-radius: 8px; padding: 12px 14px; font-size: 14px; font-weight: 700;
+    background: var(--accent); color: white; width: 100%;
+  }
+  .note { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #111827; color: white;
+    padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="title"><h1>💰 입금 입력</h1></div>
+  <div class="header-right">
+    <a href="/" title="홈" style="font-size:20px;text-decoration:none;">🏠</a>
+  </div>
+</header>
+<div class="wrap">
+  <p class="note">회비·후원금·헌금 등 청년부로 들어온 돈을 로그인 없이 바로 입력할 수 있어요. 수정·삭제는 관리자 페이지에서 해주세요.</p>
+  <form class="entry" id="incomeEntryForm">
+    <div class="full">
+      <label>날짜</label>
+      <input type="date" name="date" id="incomeEntryDate" required>
+    </div>
+    <div class="full">
+      <label>카테고리</label>
+      <select name="category" id="incomeEntryCategory" required></select>
+    </div>
+    <div>
+      <label>낸 사람 / 후원자 (선택)</label>
+      <input type="text" name="payer" placeholder="예: 홍길동">
+    </div>
+    <div>
+      <label>금액 (RM)</label>
+      <input type="number" name="amount" step="0.01" min="0.01" required>
+    </div>
+    <div class="full">
+      <label>받은 방법</label>
+      <select name="channel" id="incomeEntryChannel" required></select>
+    </div>
+    <div class="full">
+      <label>입력자</label>
+      <input type="text" name="author" placeholder="이름" required>
+    </div>
+    <div class="full">
+      <label>메모 (선택)</label>
+      <input type="text" name="memo" placeholder="예: 11월 회비">
+    </div>
+    <div class="full">
+      <button class="primary" type="submit">저장</button>
+    </div>
+  </form>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+function todayLocalStr() {
+  const d = new Date();
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0, 10);
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 2200);
+}
+
+async function loadOptions() {
+  const [catRes, channelRes] = await Promise.all([
+    fetch('/api/income-categories'),
+    fetch('/api/receive-channels')
+  ]);
+  const cats = await catRes.json();
+  const channels = await channelRes.json();
+  document.getElementById('incomeEntryCategory').innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join('');
+  document.getElementById('incomeEntryChannel').innerHTML = channels.map((c) => `<option value="${c}">${c}</option>`).join('');
+}
+
+document.getElementById('incomeEntryDate').value = todayLocalStr();
+loadOptions();
+
+document.getElementById('incomeEntryForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  const res = await fetch('/api/entries/income', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    toast('저장됐어요 ✓');
+    const author = form.author.value;
+    form.reset();
+    document.getElementById('incomeEntryDate').value = todayLocalStr();
+    form.author.value = author;
+  } else {
+    const data = await res.json().catch(() => ({}));
+    toast('오류: ' + (data.error || '저장 실패'));
+  }
+});
+</script>
+</body>
+</html>
