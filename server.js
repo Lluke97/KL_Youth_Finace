@@ -520,6 +520,24 @@ if (process.env.ADD_DEACON_600_CAFE_TRANSFER_20261121 === '1') {
   }
 }
 
+// 윤수빈/임혜란 집사님 관련 거래를 전부 찾는다. 아무것도 바꾸지 않음.
+// DIAG_FIND_YOONSUBIN_20261121=1일 때만.
+if (process.env.DIAG_FIND_YOONSUBIN_20261121 === '1') {
+  const all6 = db.getTransactions();
+  const hits6 = all6.filter((t) =>
+    String(t.payer || '').includes('윤수빈') ||
+    String(t.item || '').includes('윤수빈') ||
+    String(t.memo || '').includes('윤수빈') ||
+    String(t.payer || '').includes('임혜란') ||
+    String(t.item || '').includes('임혜란') ||
+    String(t.memo || '').includes('임혜란')
+  ).sort((a, b) => a.date.localeCompare(b.date));
+  console.log('[diag4] ===== 윤수빈/임혜란 관련 거래 ' + hits6.length + '건 =====');
+  hits6.forEach((t) => {
+    console.log(`[diag4]   ${t.date} | ${t.type} | account=${txnAccount(t)} | ${t.category} | item="${t.item || ''}" | payer="${t.payer || ''}" | ${t.amount} | source=${t.source} | memo="${t.memo || ''}" | id=${t.id}`);
+  });
+}
+
 // "집사님" 관련 거래(전체 소스/계좌 불문) + 금액 600 거래를 전부 찾는다.
 // 아무것도 바꾸지 않음. DIAG_FIND_DEACON_600_20261121=1일 때만.
 if (process.env.DIAG_FIND_DEACON_600_20261121 === '1') {
