@@ -395,6 +395,41 @@ if (process.env.DIAG_ACCOUNTS_20261120 === '1') {
   noChannel.slice(-15).forEach((t) => {
     console.log(`[diag]   ${t.date} | ${t.type} | ${t.category} | ${t.item} | ${t.amount} | author=${t.author || ''} | memo=${(t.memo || '').slice(0, 40)}`);
   });
+
+  // cafe-pos에서 동기화된(source='cafe') 거래 — 태그(카페운영/청년부지출/
+  // 확인필요)별, 그리고 그 중 account가 명시적으로 'youth'로 덮어써진 건이
+  // 있는지. "집사님이 입력한 카페 지출/입금이 청년부 일반지출로 돼있다"는
+  // 말이 이 데이터(tag 분류) 얘기인지 확인하기 위함.
+  const cafeSynced = allTxns.filter((t) => t.source === 'cafe');
+  const byTag2 = {};
+  cafeSynced.forEach((t) => {
+    const key = t.tag || '(태그없음)';
+    if (!byTag2[key]) byTag2[key] = { count: 0, expense: 0, income: 0, overriddenToYouth: 0 };
+    byTag2[key].count += 1;
+    byTag2[key][t.type] += t.amount;
+    if (t.account === 'youth') byTag2[key].overriddenToYouth += 1;
+  });
+  console.log('[diag] ===== source=cafe(cafe-pos 동기화) 거래 ' + cafeSynced.length + '건, 태그별 집계 =====');
+  Object.entries(byTag2).forEach(([tag, v]) => {
+    console.log(`[diag] 태그="${tag}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense} | account=youth로 덮어쓴 건=${v.overriddenToYouth}`);
+  });
+
+  const youthGeneralCafe = cafeSynced.filter((t) => t.tag === 'youth-general');
+  const byAuthor2 = {};
+  youthGeneralCafe.forEach((t) => {
+    const key = t.author || t.vendor || '(미기재)';
+    if (!byAuthor2[key]) byAuthor2[key] = { count: 0, expense: 0, income: 0 };
+    byAuthor2[key].count += 1;
+    byAuthor2[key][t.type] += t.amount;
+  });
+  console.log('[diag] ===== source=cafe & tag=youth-general(청년부지출로 분류된 카페 거래) ' + youthGeneralCafe.length + '건, 작성자/거래처별 =====');
+  Object.entries(byAuthor2).forEach(([author, v]) => {
+    console.log(`[diag] 작성자/거래처="${author}" | 건수=${v.count} | 수입합=${v.income} | 지출합=${v.expense}`);
+  });
+  console.log('[diag] ===== 위 목록 샘플 10건 =====');
+  youthGeneralCafe.slice(0, 10).forEach((t) => {
+    console.log(`[diag]   ${t.date} | ${t.type} | ${t.item} | ${t.amount} | author=${t.author || ''} | vendor=${t.vendor || ''} | memo=${(t.memo || '').slice(0, 40)}`);
+  });
 }
 
 // One-time seed: 2026년 4/30~5/2 "1차 수련회" 재정 내역 (별도로 관리되던
