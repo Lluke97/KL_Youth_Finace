@@ -1143,6 +1143,17 @@ app.put('/api/admin/transactions/:id', (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'not found' });
   const fields = ['date', 'type', 'source', 'account', 'tag', 'category', 'item', 'vendor', 'payer', 'payment', 'channel', 'amount', 'memo', 'author'];
   fields.forEach((f) => { if (req.body && req.body[f] !== undefined) txns[idx][f] = req.body[f]; });
+  // 구매(지출) 수정 폼에는 channel 선택란이 따로 없고 payment(결제수단)만
+  // 고치게 되어 있다 — payment를 현금→카드로 바꿔도 channel이 그대로
+  // 'cash'로 남으면 실제 잔액 구성(현금/TnG/계좌, computeAccountBreakdown)이
+  // 예전 결제수단 기준으로 계속 집계돼서 정산 탭 숫자가 안 맞게 된다.
+  // payment만 바뀌고 channel은 호출자가 따로 안 보낸 경우에 한해 channel을
+  // payment 기준으로 다시 계산해준다 (channel을 명시적으로 같이 보낸
+  // 경우엔 그 값을 그대로 존중한다).
+  if (req.body && req.body.payment !== undefined && req.body.channel === undefined) {
+    const derived = paymentToChannel(req.body.payment);
+    if (derived) txns[idx].channel = derived;
+  }
   db.saveTransactions(txns);
   res.json(txns[idx]);
 });
