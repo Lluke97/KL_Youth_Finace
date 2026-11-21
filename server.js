@@ -40,6 +40,11 @@ function channelToBucket(channel) {
   if (channel === '계좌이체') return 'bank';
   return null;
 }
+// bucket(cash/tng/bank) → 표시용 라벨. paymentToChannel/channelToBucket의
+// 역방향. channel이 어떤 경로로든 바뀌었을 때 receiveChannel/payment 같은
+// 표시용 필드도 같이 맞춰주는 데 쓴다.
+const BUCKET_TO_RECEIVE_CHANNEL = { cash: '현금', tng: '터치앤고', bank: '계좌이체' };
+const BUCKET_TO_PAYMENT = { cash: '현금', tng: '터치앤고', bank: '카드' };
 
 // 카페 재정과 청년부 재정을 완전히 분리된 두 계좌로 다룬다. 거래 데이터엔
 // 이미 source(cafe/membership/manual/carryover)가 있으니 그대로 재사용:
@@ -53,6 +58,25 @@ function channelToBucket(channel) {
 function txnAccount(t) {
   if (t && (t.account === 'cafe' || t.account === 'youth')) return t.account;
   return t && t.source === 'cafe' ? 'cafe' : 'youth';
+}
+
+// "청년부 재정은 현금이 없고 다 은행이다" 불변식을 저장 시점마다 바로
+// 적용한다. 예전엔 이 규칙을 서버 시작 시 한 번만 훑어서 되돌리는
+// forceYouthChannelToBank() IIFE로만 지켰는데, 그 사이(다음 배포/재시작
+// 전까지)는 생성·수정 직후 잠깐이 아니라 계속 틀린 채로 남아있을 수
+// 있었다(수입 입력 시 수금채널을 현금/터치앤고로 고르거나, 카페→청년부
+// 이체에서 현금으로 전달했다고 기록하는 경우 등 실제로 거쳐가는 경로가
+// 여러 곳이라서). 이제 거래가 만들어지거나 수정되는 모든 지점에서 이
+// 함수를 거쳐 즉시 맞춘다 — 표시용 라벨(receiveChannel/payment)도 같이
+// 맞춘다. 카페 계좌는 실제로 서랍에 현금이 있으므로 건드리지 않는다.
+// 이미 bank인 건 다시 안 건드리므로 몇 번을 호출해도 안전하다(멱등).
+function normalizeChannelForAccount(t) {
+  if (t && txnAccount(t) === 'youth' && (t.channel === 'cash' || t.channel === 'tng')) {
+    t.channel = 'bank';
+    if (t.receiveChannel) t.receiveChannel = '계좌이체';
+    if (t.payment) t.payment = '카드';
+  }
+  return t;
 }
 function settlementAccount(s) {
   if (s && (s.account === 'cafe' || s.account === 'youth')) return s.account;
@@ -968,6 +992,7 @@ app.post('/api/admin/transactions', (req, res) => {
     externalId: null,
     createdAt: new Date().toISOString()
   };
+  normalizeChannelForAccount(entry);
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
@@ -1009,6 +1034,7 @@ function createPurchaseEntry(req, res) {
     externalId: null,
     createdAt: new Date().toISOString()
   };
+  normalizeChannelForAccount(entry);
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
@@ -1053,6 +1079,7 @@ function createIncomeEntry(req, res) {
     externalId: null,
     createdAt: new Date().toISOString()
   };
+  normalizeChannelForAccount(entry);
   const txns = db.getTransactions();
   txns.push(entry);
   db.saveTransactions(txns);
@@ -1154,6 +1181,23 @@ app.put('/api/admin/transactions/:id', (req, res) => {
     const derived = paymentToChannel(req.body.payment);
     if (derived) txns[idx].channel = derived;
   }
+  // account를 cafe→youth로 바꾸는 경우처럼, 수정 결과로 "청년부 계좌인데
+  // channel이 현금/TnG" 상태가 될 수도 있다 — 생성 때와 동일하게 여기서도
+  // 바로 맞춰준다.
+  normalizeChannelForAccount(txns[idx]);
+  // channel이 이번 요청에서 바뀌었다면(수입 수정 화면의 "수금 채널" 직접
+  // 수정이든, 위의 payment→channel 유도든) 표시용 라벨(receiveChannel/
+  // payment)도 최종 channel에 맞춰 같이 정리한다. 안 그러면 잔액 집계는
+  // 맞게 바뀌는데 목록 화면의 "수금 채널"/"결제수단" 칸은 예전 값 그대로
+  // 남아서 또 다른 형태의 안 맞는 느낌을 준다. 그 필드가 원래 없던
+  // 레코드엔 새로 만들지 않는다(undefined는 그대로 둔다).
+  if (req.body && (req.body.channel !== undefined || req.body.payment !== undefined)) {
+    const finalCh = txns[idx].channel;
+    if (finalCh) {
+      if (txns[idx].receiveChannel !== undefined) txns[idx].receiveChannel = BUCKET_TO_RECEIVE_CHANNEL[finalCh] || txns[idx].receiveChannel;
+      if (txns[idx].payment !== undefined) txns[idx].payment = BUCKET_TO_PAYMENT[finalCh] || txns[idx].payment;
+    }
+  }
   db.saveTransactions(txns);
   res.json(txns[idx]);
 });
@@ -1239,6 +1283,15 @@ app.post('/api/admin/channel-transfer', (req, res) => {
     return res.status(400).json({ error: `date, 0보다 큰 amount, 서로 다른 from/to (${RECEIVE_CHANNELS.join('|')})가 필요합니다` });
   }
   const acc = account === 'cafe' ? 'cafe' : 'youth';
+  // 청년부 계좌는 현금/터치앤고를 실제로 보유하지 않는다 — "현금 ↔ 계좌
+  // 전환" 폼의 계좌 선택란 기본값이 "청년부"라서, 실수로 청년부를 고른
+  // 채 현금 관련 전환을 기록하면(예: 현금→은행) 두 다리 모두 결국
+  // normalizeChannelForAccount에 의해 bank로 맞춰져 서로 상쇄되는
+  // 의미없는 거래 쌍만 남는다. 조용히 무해한 쓰레기 거래를 남기는 대신
+  // 여기서 바로 막아서 왜 안 되는지 알려준다.
+  if (acc === 'youth' && (from !== '계좌이체' || to !== '계좌이체')) {
+    return res.status(400).json({ error: '청년부 계좌는 현금/터치앤고를 보유하지 않아요(전부 은행 처리). 현금↔계좌 전환은 카페 계좌에서만 기록하세요.' });
+  }
   const transferId = 'chxfer_' + uid();
   const now = new Date().toISOString();
   const label = `${from} → ${to} 전환`;
@@ -1335,6 +1388,11 @@ app.post('/api/admin/transfer', (req, res) => {
     externalId: null,
     createdAt: now
   };
+  // outTxn은 카페 계좌라 실제 서랍 현금/계좌 그대로 두지만, inTxn은 항상
+  // 청년부 계좌라서 전달 수단이 현금/터치앤고였어도(카페에서 현금으로
+  // 직접 건네준 경우) 청년부 쪽에는 "은행"으로 맞춰준다 — 청년부는 현금을
+  // 들고 있지 않는다는 불변식을 여기서도 지켜야 한다.
+  normalizeChannelForAccount(inTxn);
   const txns = db.getTransactions();
   txns.push(outTxn, inTxn);
   db.saveTransactions(txns);
